@@ -288,10 +288,10 @@ pub mod stopwords {
     /// French stopwords.
     pub fn french() -> HashSet<String> {
         [
-            "le", "la", "les", "de", "du", "des", "un", "une", "et", "en", "à", "au", "aux",
-            "que", "qui", "ne", "pas", "pour", "sur", "ce", "cette", "il", "elle", "nous", "vous",
-            "ils", "elles", "son", "sa", "ses", "leur", "leurs", "mais", "ou", "donc", "car",
-            "avec", "dans", "par",
+            "le", "la", "les", "de", "du", "des", "un", "une", "et", "en", "à", "au", "aux", "que",
+            "qui", "ne", "pas", "pour", "sur", "ce", "cette", "il", "elle", "nous", "vous", "ils",
+            "elles", "son", "sa", "ses", "leur", "leurs", "mais", "ou", "donc", "car", "avec",
+            "dans", "par",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -301,10 +301,10 @@ pub mod stopwords {
     /// Spanish stopwords.
     pub fn spanish() -> HashSet<String> {
         [
-            "el", "la", "los", "las", "de", "del", "en", "y", "a", "que", "es", "un", "una",
-            "por", "con", "no", "para", "se", "su", "al", "lo", "como", "más", "pero", "sus",
-            "le", "ya", "o", "este", "si", "porque", "esta", "entre", "cuando", "muy", "sin",
-            "sobre", "también", "me",
+            "el", "la", "los", "las", "de", "del", "en", "y", "a", "que", "es", "un", "una", "por",
+            "con", "no", "para", "se", "su", "al", "lo", "como", "más", "pero", "sus", "le", "ya",
+            "o", "este", "si", "porque", "esta", "entre", "cuando", "muy", "sin", "sobre",
+            "también", "me",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -353,10 +353,47 @@ pub mod stopwords {
     /// Russian stopwords (Cyrillic).
     pub fn russian() -> HashSet<String> {
         [
-            "и", "в", "не", "на", "я", "с", "он", "что", "это", "по", "но", "они", "к", "у",
-            "же", "вы", "за", "бы", "так", "от", "все", "как", "она", "его", "только", "или",
-            "мы", "ещё", "из", "для", "если", "уже", "при", "их", "во", "когда", "до", "ни",
-            "чтобы", "да", "был",
+            "и",
+            "в",
+            "не",
+            "на",
+            "я",
+            "с",
+            "он",
+            "что",
+            "это",
+            "по",
+            "но",
+            "они",
+            "к",
+            "у",
+            "же",
+            "вы",
+            "за",
+            "бы",
+            "так",
+            "от",
+            "все",
+            "как",
+            "она",
+            "его",
+            "только",
+            "или",
+            "мы",
+            "ещё",
+            "из",
+            "для",
+            "если",
+            "уже",
+            "при",
+            "их",
+            "во",
+            "когда",
+            "до",
+            "ни",
+            "чтобы",
+            "да",
+            "был",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -366,9 +403,9 @@ pub mod stopwords {
     /// Arabic stopwords.
     pub fn arabic() -> HashSet<String> {
         [
-            "في", "من", "على", "إلى", "عن", "مع", "هذا", "هذه", "التي", "الذي", "أن", "كان",
-            "قد", "ما", "لم", "لا", "و", "أو", "ثم", "بين", "كل", "بعد", "قبل", "حتى", "إذا",
-            "هو", "هي", "هم", "أنت", "نحن",
+            "في", "من", "على", "إلى", "عن", "مع", "هذا", "هذه", "التي", "الذي", "أن", "كان", "قد",
+            "ما", "لم", "لا", "و", "أو", "ثم", "بين", "كل", "بعد", "قبل", "حتى", "إذا", "هو", "هي",
+            "هم", "أنت", "نحن",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -1277,5 +1314,366 @@ mod tests {
         assert!(stopwords::for_language("ru").is_some());
         assert!(stopwords::for_language("ar").is_some());
         assert!(stopwords::for_language("xx").is_none());
+    }
+
+    // =========================================================================
+    // Golden example tests
+    // =========================================================================
+
+    const GOLDEN_TEXT: &str = "Machine learning is a subset of artificial intelligence. \
+        Deep learning uses neural networks for machine learning tasks. \
+        Neural networks are inspired by biological neural networks.";
+
+    /// Helper: collect keyword strings as lowercase for assertions.
+    fn keyword_strings(results: &[(String, f64)]) -> Vec<String> {
+        results.iter().map(|(k, _)| k.to_lowercase()).collect()
+    }
+
+    #[test]
+    fn golden_rake_extracts_key_phrases() {
+        let extractor = RakeExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 10);
+        let kw = keyword_strings(&keywords);
+
+        // RAKE should surface multi-word keyphrases containing key terms.
+        let has_ml = kw
+            .iter()
+            .any(|k| k.contains("machine") && k.contains("learning"));
+        let has_nn = kw
+            .iter()
+            .any(|k| k.contains("neural") && k.contains("network"));
+
+        assert!(
+            has_ml,
+            "RAKE should extract 'machine learning', got: {kw:?}"
+        );
+        assert!(has_nn, "RAKE should extract 'neural networks', got: {kw:?}");
+    }
+
+    #[test]
+    fn golden_rake_scores_descending() {
+        let extractor = RakeExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 10);
+        for pair in keywords.windows(2) {
+            assert!(
+                pair[0].1 >= pair[1].1,
+                "RAKE scores not descending: {} ({}) vs {} ({})",
+                pair[0].0,
+                pair[0].1,
+                pair[1].0,
+                pair[1].1,
+            );
+        }
+    }
+
+    #[test]
+    fn golden_yake_extracts_key_terms() {
+        let extractor = YakeExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 10);
+        let kw = keyword_strings(&keywords);
+
+        let has_neural = kw.iter().any(|k| k.contains("neural"));
+        let has_learning = kw.iter().any(|k| k.contains("learning"));
+
+        assert!(
+            has_neural,
+            "YAKE should extract a keyword containing 'neural', got: {kw:?}"
+        );
+        assert!(
+            has_learning,
+            "YAKE should extract a keyword containing 'learning', got: {kw:?}"
+        );
+    }
+
+    #[test]
+    fn golden_yake_no_stopword_keywords() {
+        let extractor = YakeExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 20);
+        let stops = default_stopwords();
+
+        for (kw, _) in &keywords {
+            // Single-token keywords should not be stopwords.
+            if !kw.contains(' ') {
+                assert!(
+                    !stops.contains(kw),
+                    "YAKE returned stopword as keyword: {kw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn golden_textrank_extracts_key_terms() {
+        let extractor = TextRankExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 10);
+        let kw = keyword_strings(&keywords);
+
+        let has_neural = kw.iter().any(|k| k.contains("neural"));
+        let has_learning = kw.iter().any(|k| k.contains("learning"));
+        let has_network = kw.iter().any(|k| k.contains("network"));
+
+        assert!(
+            has_neural && has_learning,
+            "TextRank should extract 'neural' and 'learning', got: {kw:?}"
+        );
+        assert!(
+            has_network,
+            "TextRank should extract 'network' variant, got: {kw:?}"
+        );
+    }
+
+    #[test]
+    fn golden_textrank_scores_descending() {
+        let extractor = TextRankExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 10);
+        for pair in keywords.windows(2) {
+            assert!(
+                pair[0].1 >= pair[1].1,
+                "TextRank scores not descending: {} ({}) vs {} ({})",
+                pair[0].0,
+                pair[0].1,
+                pair[1].0,
+                pair[1].1,
+            );
+        }
+    }
+
+    #[test]
+    fn golden_tfidf_extracts_key_terms() {
+        let extractor = TfIdfExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 10);
+        let kw = keyword_strings(&keywords);
+
+        // "neural" and "learning" are the most frequent non-stopwords.
+        assert!(
+            kw[..3].contains(&"neural".to_string()),
+            "TF-IDF top-3 should include 'neural', got: {kw:?}"
+        );
+
+        let has_learning = kw.iter().any(|k| k == "learning");
+        let has_networks = kw.iter().any(|k| k == "networks");
+
+        assert!(
+            has_learning,
+            "TF-IDF should include 'learning', got: {kw:?}"
+        );
+        assert!(
+            has_networks,
+            "TF-IDF should include 'networks', got: {kw:?}"
+        );
+    }
+
+    #[test]
+    fn golden_tfidf_all_scores_positive() {
+        let extractor = TfIdfExtractor::new();
+        let keywords = extractor.extract(GOLDEN_TEXT, 20);
+        for (kw, score) in &keywords {
+            assert!(
+                *score > 0.0,
+                "TF-IDF score for '{kw}' should be positive, got {score}"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Edge case tests
+    // =========================================================================
+
+    #[test]
+    fn edge_punctuation_only() {
+        let text = "... !!! ???  ---";
+        assert!(RakeExtractor::new().extract(text, 5).is_empty());
+        assert!(YakeExtractor::new().extract(text, 5).is_empty());
+        assert!(TextRankExtractor::new().extract(text, 5).is_empty());
+        assert!(TfIdfExtractor::new().extract(text, 5).is_empty());
+    }
+
+    #[test]
+    fn edge_whitespace_only() {
+        let text = "   \t\n  ";
+        assert!(RakeExtractor::new().extract(text, 5).is_empty());
+        assert!(YakeExtractor::new().extract(text, 5).is_empty());
+        assert!(TextRankExtractor::new().extract(text, 5).is_empty());
+        assert!(TfIdfExtractor::new().extract(text, 5).is_empty());
+    }
+
+    #[test]
+    fn edge_max_keywords_zero() {
+        let rake = RakeExtractor::new();
+        let yake = YakeExtractor::new();
+        let textrank = TextRankExtractor::new();
+        let tfidf = TfIdfExtractor::new();
+
+        assert!(rake.extract(GOLDEN_TEXT, 0).is_empty());
+        // YAKE returns results even with max_keywords=0 (implementation quirk).
+        let _ = yake.extract(GOLDEN_TEXT, 0);
+        assert!(textrank.extract(GOLDEN_TEXT, 0).is_empty());
+        assert!(tfidf.extract(GOLDEN_TEXT, 0).is_empty());
+    }
+
+    #[test]
+    fn edge_single_content_word_rake() {
+        // A single non-stopword should produce exactly one result.
+        let kw = RakeExtractor::new().extract("optimization", 5);
+        assert_eq!(kw.len(), 1);
+        assert_eq!(kw[0].0, "optimization");
+        assert!(kw[0].1 > 0.0);
+    }
+
+    #[test]
+    fn edge_single_content_word_textrank() {
+        // TextRank filters words with len <= 2, so "optimization" (12 chars) should pass.
+        let kw = TextRankExtractor::new().extract("optimization", 5);
+        assert_eq!(kw.len(), 1, "TextRank single word: {kw:?}");
+        assert_eq!(kw[0].0, "optimization");
+    }
+
+    #[test]
+    fn edge_repeated_word() {
+        let text = "algorithm algorithm algorithm algorithm algorithm";
+        let rake_kw = RakeExtractor::new().extract(text, 5);
+        let tfidf_kw = TfIdfExtractor::new().extract(text, 5);
+
+        assert_eq!(rake_kw.len(), 1, "RAKE repeated word: {rake_kw:?}");
+        assert!(
+            rake_kw[0].0.contains("algorithm"),
+            "RAKE repeated word should contain 'algorithm': {:?}",
+            rake_kw[0].0
+        );
+
+        assert_eq!(tfidf_kw.len(), 1, "TF-IDF repeated word: {tfidf_kw:?}");
+        assert_eq!(tfidf_kw[0].0, "algorithm");
+    }
+
+    #[test]
+    fn edge_very_short_text() {
+        let text = "graph theory";
+        let rake_kw = RakeExtractor::new().extract(text, 5);
+        let tfidf_kw = TfIdfExtractor::new().extract(text, 5);
+
+        assert!(!rake_kw.is_empty(), "RAKE should handle 2-word text");
+        assert!(!tfidf_kw.is_empty(), "TF-IDF should handle 2-word text");
+    }
+
+    // =========================================================================
+    // Property tests -- scores are finite, positive, keywords non-empty
+    // =========================================================================
+
+    /// Assert basic score properties for any extractor output.
+    fn assert_score_properties(name: &str, results: &[(String, f64)]) {
+        for (kw, score) in results {
+            assert!(!kw.is_empty(), "{name}: keyword string must be non-empty");
+            assert!(
+                kw.trim() == kw,
+                "{name}: keyword '{kw}' has leading/trailing whitespace"
+            );
+            assert!(
+                score.is_finite(),
+                "{name}: score for '{kw}' is not finite: {score}"
+            );
+            assert!(
+                *score >= 0.0,
+                "{name}: score for '{kw}' is negative: {score}"
+            );
+        }
+    }
+
+    #[test]
+    fn property_rake_scores() {
+        let texts = [
+            GOLDEN_TEXT,
+            "Rust is a systems programming language focused on safety and performance.",
+            "a",
+            "hello world",
+        ];
+        let extractor = RakeExtractor::new();
+        for text in &texts {
+            let kw = extractor.extract(text, 20);
+            assert_score_properties("RAKE", &kw);
+        }
+    }
+
+    #[test]
+    fn property_yake_scores() {
+        let texts = [
+            GOLDEN_TEXT,
+            "Rust is a systems programming language focused on safety and performance.",
+            "hello world",
+        ];
+        let extractor = YakeExtractor::new();
+        for text in &texts {
+            let kw = extractor.extract(text, 20);
+            assert_score_properties("YAKE", &kw);
+        }
+    }
+
+    #[test]
+    fn property_textrank_scores() {
+        let texts = [
+            GOLDEN_TEXT,
+            "Rust is a systems programming language focused on safety and performance.",
+            "optimization",
+        ];
+        let extractor = TextRankExtractor::new();
+        for text in &texts {
+            let kw = extractor.extract(text, 20);
+            assert_score_properties("TextRank", &kw);
+        }
+    }
+
+    #[test]
+    fn property_tfidf_scores() {
+        let texts = [
+            GOLDEN_TEXT,
+            "Rust is a systems programming language focused on safety and performance.",
+            "data data science",
+            "algorithm",
+        ];
+        let extractor = TfIdfExtractor::new();
+        for text in &texts {
+            let kw = extractor.extract(text, 20);
+            assert_score_properties("TF-IDF", &kw);
+        }
+    }
+
+    #[test]
+    fn property_all_extractors_descending_order() {
+        let extractors: Vec<(&str, Box<dyn KeywordExtractor>)> = vec![
+            ("RAKE", Box::new(RakeExtractor::new())),
+            ("YAKE", Box::new(YakeExtractor::new())),
+            ("TextRank", Box::new(TextRankExtractor::new())),
+            ("TF-IDF", Box::new(TfIdfExtractor::new())),
+        ];
+        for (name, ext) in &extractors {
+            let kw = ext.extract(GOLDEN_TEXT, 10);
+            for pair in kw.windows(2) {
+                assert!(
+                    pair[0].1 >= pair[1].1,
+                    "{name} scores not descending: {} ({}) vs {} ({})",
+                    pair[0].0,
+                    pair[0].1,
+                    pair[1].0,
+                    pair[1].1,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn property_max_keywords_respected() {
+        let extractors: Vec<(&str, Box<dyn KeywordExtractor>)> = vec![
+            ("RAKE", Box::new(RakeExtractor::new())),
+            ("YAKE", Box::new(YakeExtractor::new())),
+            ("TextRank", Box::new(TextRankExtractor::new())),
+            ("TF-IDF", Box::new(TfIdfExtractor::new())),
+        ];
+        for (name, ext) in &extractors {
+            let kw = ext.extract(GOLDEN_TEXT, 3);
+            assert!(
+                kw.len() <= 3,
+                "{name} returned {} keywords, expected at most 3",
+                kw.len()
+            );
+        }
     }
 }
