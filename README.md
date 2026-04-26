@@ -1,6 +1,6 @@
 # distil
 
-Keyword and keyphrase extraction in Rust: TF-IDF, YAKE, TextRank, and RAKE.
+Keyword and keyphrase extraction: TF-IDF, YAKE, TextRank, and RAKE.
 
 [![crates.io](https://img.shields.io/crates/v/distil.svg)](https://crates.io/crates/distil)
 [![docs.rs](https://docs.rs/distil/badge.svg)](https://docs.rs/distil)
