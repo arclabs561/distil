@@ -28,10 +28,10 @@ for (score, phrase) in &keywords {
 
 Four extractors share the `KeywordExtractor` trait:
 
-- `TfIdfExtractor` -- term frequency, inverse document frequency
-- `YakeExtractor` -- unsupervised, statistical
-- `TextRankExtractor` -- graph-based (uses `graphops`)
-- `RakeExtractor` -- rapid automatic keyword extraction
+- `TfIdfExtractor`: term frequency, inverse document frequency
+- `YakeExtractor`: unsupervised, statistical
+- `TextRankExtractor`: graph-based (uses `graphops`)
+- `RakeExtractor`: rapid automatic keyword extraction
 
 Stopword lists for English, German, French, Spanish, Portuguese, Italian, Dutch, Russian, and Arabic.
 
