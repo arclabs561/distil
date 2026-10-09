@@ -500,32 +500,36 @@ impl RakeExtractor {
         let mut candidates = Vec::new();
         let mut current_phrase = Vec::new();
 
-        for word in text.split(|c: char| !c.is_alphanumeric() && c != '\'') {
-            let word_lower = word.to_lowercase();
-
-            if word.is_empty() || word.len() < self.min_word_length {
-                continue;
-            }
-
-            if self.stopwords.contains(&word_lower) {
-                if current_phrase.len() >= self.min_phrase_length
-                    && current_phrase.len() <= self.max_phrase_length
-                {
-                    candidates.push(current_phrase.clone());
-                }
-                current_phrase.clear();
-            } else {
-                current_phrase.push(word_lower);
-            }
-        }
-
-        if current_phrase.len() >= self.min_phrase_length
-            && current_phrase.len() <= self.max_phrase_length
+        // Punctuation ends a phrase, as in the RAKE paper's delimiter set;
+        // whitespace only separates words.
+        for segment in text.split(|c: char| !c.is_alphanumeric() && !c.is_whitespace() && c != '\'')
         {
-            candidates.push(current_phrase);
+            for word in segment.split_whitespace() {
+                let word_lower = word.to_lowercase();
+
+                if word.len() < self.min_word_length {
+                    continue;
+                }
+
+                if self.stopwords.contains(&word_lower) {
+                    self.flush_phrase(&mut current_phrase, &mut candidates);
+                } else {
+                    current_phrase.push(word_lower);
+                }
+            }
+            self.flush_phrase(&mut current_phrase, &mut candidates);
         }
 
         candidates
+    }
+
+    /// Move `phrase` into `candidates` if its length is in range, then clear it.
+    fn flush_phrase(&self, phrase: &mut Vec<String>, candidates: &mut Vec<Vec<String>>) {
+        if phrase.len() >= self.min_phrase_length && phrase.len() <= self.max_phrase_length {
+            candidates.push(std::mem::take(phrase));
+        } else {
+            phrase.clear();
+        }
     }
 
     /// Compute word scores using degree/frequency.
@@ -1097,6 +1101,17 @@ mod tests {
         assert!(
             phrases.contains(&"subset".to_string()),
             "expected 'subset' in {phrases:?}"
+        );
+    }
+
+    #[test]
+    fn rake_punctuation_ends_a_phrase() {
+        let rake = RakeExtractor::new();
+        let candidates = rake.extract_candidates("fast cars, slow trucks. red lorry; blue bus");
+        let phrases: Vec<String> = candidates.iter().map(|p| p.join(" ")).collect();
+        assert_eq!(
+            phrases,
+            vec!["fast cars", "slow trucks", "red lorry", "blue bus"]
         );
     }
 

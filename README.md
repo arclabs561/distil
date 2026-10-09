@@ -9,7 +9,7 @@ Keyword and keyphrase extraction.
 
 ```toml
 [dependencies]
-distil = "0.1"
+distil = { git = "https://github.com/arclabs561/distil" }
 ```
 
 ## Usage
@@ -21,7 +21,7 @@ let text = "Rust is a systems programming language focused on safety and perform
 let extractor = RakeExtractor::new();
 let keywords = extractor.extract(text, 5);
 
-for (score, phrase) in &keywords {
+for (phrase, score) in &keywords {
     println!("{score:.2}  {phrase}");
 }
 ```
