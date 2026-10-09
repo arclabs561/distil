@@ -46,6 +46,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+// Compile and run the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 // =============================================================================
 // Common Trait
 // =============================================================================
@@ -576,7 +581,7 @@ impl KeywordExtractor for RakeExtractor {
         }
 
         let mut sorted: Vec<_> = phrase_scores.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         sorted.truncate(max_keywords);
 
         sorted
@@ -587,11 +592,16 @@ impl KeywordExtractor for RakeExtractor {
 // YAKE (Yet Another Keyword Extractor)
 // =============================================================================
 
-/// YAKE keyword extractor.
+/// YAKE-style keyword extractor.
 ///
 /// Statistical, unsupervised keyword extractor that uses multiple features
 /// (casing, position, frequency, relatedness, sentence frequency) without
 /// requiring external corpora.
+///
+/// This is a simplified scoring inspired by YAKE, not the published
+/// algorithm: it has no context-relatedness feature, higher scores are
+/// better (YAKE ranks lower scores first), and its scores will not match
+/// the reference `yake` package.
 ///
 /// # Reference
 ///
@@ -762,7 +772,7 @@ impl KeywordExtractor for YakeExtractor {
         }
 
         let mut sorted: Vec<_> = ngram_scores.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
         // Deduplicate: skip keywords that are substrings of already-selected ones
         let mut result = Vec::new();
@@ -791,6 +801,11 @@ impl KeywordExtractor for YakeExtractor {
 ///
 /// Builds a word co-occurrence graph (words within a sliding window are
 /// connected) and runs PageRank to find important terms.
+///
+/// Differs from Mihalcea & Tarau: edges are weighted by co-occurrence count,
+/// a stopword filter stands in for the part-of-speech filter, the default
+/// window is 4, and it returns single words without merging adjacent
+/// keywords into phrases.
 ///
 /// # Reference
 ///
@@ -823,7 +838,8 @@ impl TextRankExtractor {
 
     /// Set window size for co-occurrence.
     pub fn with_window(mut self, size: usize) -> Self {
-        self.window_size = size;
+        // A window below 2 links no words, and `windows(0)` panics.
+        self.window_size = size.max(2);
         self
     }
 
@@ -848,12 +864,15 @@ impl TextRankExtractor {
             return HashMap::new();
         }
 
-        let vocab: Vec<_> = words
+        // Sorted so node order, and with it the floating-point summation
+        // order inside PageRank, is the same on every call.
+        let mut vocab: Vec<_> = words
             .iter()
             .cloned()
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
+        vocab.sort();
         let word_to_idx: HashMap<_, _> = vocab
             .iter()
             .enumerate()
@@ -904,7 +923,7 @@ impl KeywordExtractor for TextRankExtractor {
         let word_scores = self.compute_pagerank(&words);
 
         let mut sorted: Vec<_> = word_scores.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         sorted.truncate(max_keywords);
 
         sorted
@@ -964,7 +983,7 @@ impl KeywordExtractor for TfIdfExtractor {
             })
             .collect();
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         scored.truncate(max_keywords);
 
         scored
@@ -1113,6 +1132,38 @@ mod tests {
             phrases,
             vec!["fast cars", "slow trucks", "red lorry", "blue bus"]
         );
+    }
+
+    #[test]
+    fn textrank_window_below_two_does_not_panic() {
+        let ex = TextRankExtractor::new().with_window(0);
+        let kw = ex.extract("graph ranking of words in a short text about graphs", 3);
+        assert!(!kw.is_empty());
+    }
+
+    /// Tied scores must come back in the same order on every call
+    /// (ascending text), not in hash-map iteration order.
+    #[test]
+    fn tied_scores_are_ordered_by_text_on_every_call() {
+        let text = "alpha bravo charlie delta echo foxtrot golf hotel india juliet";
+        let extractors: Vec<(&str, Box<dyn KeywordExtractor>)> = vec![
+            ("tfidf", Box::new(TfIdfExtractor::new())),
+            ("rake", Box::new(RakeExtractor::new())),
+            ("yake", Box::new(YakeExtractor::new())),
+            ("textrank", Box::new(TextRankExtractor::new())),
+        ];
+        for (name, ex) in &extractors {
+            let first = ex.extract(text, 5);
+            for _ in 0..30 {
+                assert_eq!(ex.extract(text, 5), first, "{name} is not deterministic");
+            }
+        }
+        let tfidf: Vec<String> = TfIdfExtractor::new()
+            .extract(text, 3)
+            .into_iter()
+            .map(|(w, _)| w)
+            .collect();
+        assert_eq!(tfidf, vec!["alpha", "bravo", "charlie"]);
     }
 
     #[test]

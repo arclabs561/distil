@@ -2,9 +2,6 @@
 
 Keyword and keyphrase extraction.
 
-[![crates.io](https://img.shields.io/crates/v/distil.svg)](https://crates.io/crates/distil)
-[![docs.rs](https://docs.rs/distil/badge.svg)](https://docs.rs/distil)
-
 ## Install
 
 ```toml
@@ -28,9 +25,9 @@ for (phrase, score) in &keywords {
 
 Four extractors share the `KeywordExtractor` trait:
 
-- `TfIdfExtractor`: term frequency, inverse document frequency
-- `YakeExtractor`: unsupervised, statistical
-- `TextRankExtractor`: graph-based (uses `graphops`)
+- `TfIdfExtractor`: term frequency within one document (no IDF without a corpus)
+- `YakeExtractor`: unsupervised, statistical; a simplified YAKE-style score, not the published algorithm
+- `TextRankExtractor`: PageRank over a word co-occurrence graph (uses `graphops`); returns single words
 - `RakeExtractor`: rapid automatic keyword extraction
 
 Stopword lists for English, German, French, Spanish, Portuguese, Italian, Dutch, Russian, and Arabic.
