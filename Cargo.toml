@@ -12,4 +12,4 @@ categories = ["text-processing"]
 [workspace]
 
 [dependencies]
-graphops = "0.1.3"
+graphops = "0.5.1"
