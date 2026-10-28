@@ -23,6 +23,13 @@ for (phrase, score) in &keywords {
 }
 ```
 
+```text
+16.00  systems programming language focused
+1.00  performance
+1.00  rust
+1.00  safety
+```
+
 Four extractors share the `KeywordExtractor` trait:
 
 - `TfIdfExtractor`: term frequency within one document (no IDF without a corpus)

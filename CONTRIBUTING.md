@@ -1,6 +1,6 @@
 # Contributing to distil
 
-Thanks for your interest. distil is keyword and keyphrase extraction: TF-IDF, YAKE, TextRank, RAKE.
+distil extracts keywords and keyphrases.
 
 ## Before you start
 
@@ -25,7 +25,7 @@ cargo test --all-features
 
 ## Testing
 
-- `cargo test --all-features` for the full matrix.
+- `cargo test --all-features` runs the tests with all features enabled.
 - Test names should describe the property under test, not the function under test.
 
 ## Pull requests
