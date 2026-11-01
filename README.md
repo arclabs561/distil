@@ -37,7 +37,11 @@ Four extractors share the `KeywordExtractor` trait:
 - `TextRankExtractor`: PageRank over a word co-occurrence graph (uses `graphops`); returns single words
 - `RakeExtractor`: rapid automatic keyword extraction
 
-Stopword lists for English, German, French, Spanish, Portuguese, Italian, Dutch, Russian, and Arabic.
+Tokenization splits on whitespace and punctuation, with English stopwords by
+default. `stopwords::for_language` returns lists for German, French, Spanish,
+Portuguese, Italian, Dutch, Russian, and Arabic; `RakeExtractor` and
+`YakeExtractor` take them through `with_stopwords`. Pre-tokenize CJK, Thai, or
+Arabic text before extraction.
 
 ## License
 
