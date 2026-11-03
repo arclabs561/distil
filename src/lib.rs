@@ -753,14 +753,17 @@ impl KeywordExtractor for YakeExtractor {
         // 2-grams through n_gram_max
         for n in 2..=self.n_gram_max {
             for window in words.windows(n) {
-                if window.iter().any(|w| self.stopwords.contains(w)) {
+                // Every word needs a score. Stopwords and one-character tokens
+                // have none, and skipping them in the product while dividing by
+                // n would inflate the n-gram above its own scored words.
+                if window.iter().any(|w| !word_scores.contains_key(w)) {
                     continue;
                 }
 
                 let ngram = window.join(" ");
                 let score: f64 = window
                     .iter()
-                    .filter_map(|w| word_scores.get(w))
+                    .map(|w| word_scores[w])
                     .product::<f64>()
                     .powf(1.0 / n as f64); // Geometric mean
 
@@ -1234,6 +1237,24 @@ mod tests {
         let yake = YakeExtractor::new();
         let features = yake.compute_word_features("");
         assert!(features.is_empty());
+    }
+
+    #[test]
+    fn test_yake_ngram_with_unscored_token_is_not_a_candidate() {
+        // "2" and "4" are too short to get a word score. They used to drop out
+        // of the geometric mean while still counting toward n, so "arms 2"
+        // scored sqrt(score(arms)) and outranked "arms" itself.
+        let yake = YakeExtractor::new();
+        let keywords = yake.extract(
+            "The robot has arms 2 and arms 4. Each robot arm carries a camera.",
+            20,
+        );
+        for (keyword, _) in &keywords {
+            assert!(
+                keyword.split(' ').all(|w| w.len() > 1),
+                "{keyword:?} contains a token with no word score: {keywords:?}"
+            );
+        }
     }
 
     #[test]
