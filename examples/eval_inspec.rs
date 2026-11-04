@@ -17,12 +17,18 @@
 //! stopword-delimited candidates rather than noun phrases. ExpandRank gets
 //! each abstract's 5 nearest abstracts by TF-IDF cosine (as in its paper);
 //! CollabRank gets the abstract and the same 5 neighbours as its cluster.
+//! TF-IDF (corpus), KP-Miner and SGRank take document frequencies counted
+//! over the 500 test abstracts; Tomokiyo-Hurst takes the same abstracts'
+//! word counts as its background. EmbedRank and WordAttractionRank need
+//! phrase or word vectors from an embedding model and are not run here.
 
 use distil::text::{stem, Document};
+use distil::tomokiyohurst::Background;
 use distil::{
-    default_stopwords, CollabRank, ExpandRank, KeywordExtractor, MultipartiteRank, PositionRank,
-    RakeExtractor, SingleRank, TextRank, TextRankExtractor, TfIdfExtractor, TopicRank,
-    TopicalPageRank, YakeExtractor,
+    default_stopwords, CollabRank, CommunityCluster, DocumentFrequency, ExpandRank, FirstPhrases,
+    KeyCluster, KeywordExtractor, KpMiner, MultipartiteRank, PositionRank, RakeExtractor, SgRank,
+    SingleRank, TextRank, TextRankExtractor, TfIdf, TfIdfExtractor, TomokiyoHurst, TopicRank,
+    TopicalPageRank, Yake, YakeExtractor,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -207,6 +213,31 @@ fn main() {
         })
         .collect();
     runs.push(("CollabRank", collab));
+    let df = DocumentFrequency::from_documents(&docs, &default_stopwords(), 5);
+    let bg = Background::from_documents(&docs);
+    let each =
+        |f: &dyn Fn(&Document) -> Vec<(String, f64)>| -> Ranked { docs.iter().map(f).collect() };
+    runs.push(("TF-IDF (corpus)", each(&|d| TfIdf::new().rank(d, &df, k))));
+    runs.push(("KP-Miner", each(&|d| KpMiner::new().rank(d, &df, k))));
+    runs.push((
+        "KP-Miner lasf=1",
+        each(&|d| KpMiner::new().with_lasf(1).rank(d, &df, k)),
+    ));
+    runs.push(("YAKE (paper)", each(&|d| Yake::new().rank(d, k))));
+    runs.push(("FirstPhrases", by_text(&FirstPhrases::new())));
+    runs.push((
+        "SGRank",
+        each(&|d| SgRank::new().rank_with(d, Some(&df), k)),
+    ));
+    runs.push(("KeyCluster", each(&|d| KeyCluster::new().rank(d, k))));
+    runs.push((
+        "CommunityCluster",
+        each(&|d| CommunityCluster::new().rank(d, k)),
+    ));
+    runs.push((
+        "Tomokiyo-Hurst",
+        each(&|d| TomokiyoHurst::new().rank(d, &bg, k)),
+    ));
     if let Some((doc_topics, word_topics)) = &topics {
         let tpr = TopicalPageRank::new();
         let ranked = docs
