@@ -13,3 +13,4 @@ categories = ["text-processing"]
 
 [dependencies]
 graphops = "0.1.3"
+rust-stemmers = "1.2"
