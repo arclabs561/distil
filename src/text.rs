@@ -13,6 +13,8 @@
 //! - [`delimited_phrases`]: maximal runs of tokens that are neither stopwords
 //!   nor punctuation. This is the default when tokens have no tags.
 //! - [`ngrams`]: every n-gram inside those runs.
+//! - [`all_ngrams`]: every n-gram of a sentence, for pke's select-then-filter
+//!   order ([`filter_candidates`]).
 //! - [`longest_sequences`]: maximal runs of tokens accepted by a predicate,
 //!   for example tags in {NOUN, PROPN, ADJ}.
 //! - [`noun_phrases`]: matches of `(ADJ)*(NOUN|PROPN)+`.
@@ -331,14 +333,39 @@ pub fn delimited_phrases(
 /// Every n-gram of 1 to `max_n` words inside stopword- and
 /// punctuation-delimited runs.
 pub fn ngrams(doc: &Document, stopwords: &HashSet<String>, max_n: usize) -> Vec<Candidate> {
+    ngrams_where(doc, |t| is_content(t, stopwords), max_n)
+}
+
+/// Every n-gram of 1 to `max_n` tokens, all accepted by `keep`, within a
+/// sentence.
+pub fn ngrams_where(doc: &Document, keep: impl Fn(&Token) -> bool, max_n: usize) -> Vec<Candidate> {
     let mut c = Collector::default();
     let mut shift = 0;
     for sentence in doc.sentences() {
         for j in 0..sentence.len() {
             for k in j + 1..=(j + max_n).min(sentence.len()) {
-                if !is_content(&sentence[k - 1], stopwords) {
+                if !keep(&sentence[k - 1]) {
                     break;
                 }
+                c.add(&sentence[j..k], shift + j);
+            }
+        }
+        shift += sentence.len();
+    }
+    c.out
+}
+
+/// Every n-gram of 1 to `max_n` tokens within each sentence, stopwords and
+/// punctuation included, as pke's `ngram_selection` builds them. Pass the
+/// result through [`filter_candidates`] to get pke's n-gram candidates: the
+/// filter looks only at each lexical form's first occurrence, so the
+/// occurrence counts include spans that [`ngrams`] would never produce.
+pub fn all_ngrams(doc: &Document, max_n: usize) -> Vec<Candidate> {
+    let mut c = Collector::default();
+    let mut shift = 0;
+    for sentence in doc.sentences() {
+        for j in 0..sentence.len() {
+            for k in j + 1..=(j + max_n).min(sentence.len()) {
                 c.add(&sentence[j..k], shift + j);
             }
         }

@@ -1,4 +1,4 @@
-"""Generate tests/fixtures/pke_parity.rs from pke's graph keyphrase methods.
+"""Generate tests/fixtures/pke_parity.rs from pke's keyphrase methods.
 
 Run from the repository root:
 
@@ -10,8 +10,12 @@ Run from the repository root:
 For each text, pke tokenizes, tags and stems with spaCy en_core_web_sm and
 NLTK's Porter stemmer; the fixture records those tokens so the Rust test can
 feed distil exactly what pke saw. It also records every candidate's score
-from TextRank, SingleRank, PositionRank, TopicRank, MultipartiteRank and
-TopicalPageRank.
+from TextRank, SingleRank, PositionRank, TopicRank, MultipartiteRank,
+TopicalPageRank, TfIdf, KPMiner and FirstPhrases.
+
+TfIdf and KPMiner need document frequencies. The fixture counts them over
+the four texts themselves, from pke's 1- to 5-gram candidates (ngram_selection
+then candidate_filtering), and records them with the document count.
 
 Two changes to pke's runs, both to make the reference exact rather than
 approximate:
@@ -114,6 +118,17 @@ def lda_model():
     return list(vec.get_feature_names_out()), model
 
 
+def document_frequency():
+    df = {}
+    for text in TEXTS.values():
+        e = load(pke.unsupervised.KPMiner, text)
+        e.ngram_selection(n=5)
+        e.candidate_filtering()
+        for k in e.candidates:
+            df[k] = df.get(k, 0) + 1
+    return df
+
+
 def pke_revision():
     dist = importlib.metadata.distribution("pke")
     url = json.loads(dist.read_text("direct_url.json") or "{}")
@@ -132,6 +147,8 @@ def rust_f64(x):
 
 def main(out_path):
     dictionary, model = lda_model()
+    df = document_frequency()
+    df_pke = dict(df, **{"--NB_DOC--": len(TEXTS)})
     topic_word = model.components_ / model.components_.sum(axis=1)[:, np.newaxis]
     cases = []
     for name, text in TEXTS.items():
@@ -165,6 +182,26 @@ def main(out_path):
         e.candidate_weighting(alpha=1.1, threshold=0.74, method="average")
         methods["multipartiterank"] = scored(e)
 
+        e = load(pke.unsupervised.TfIdf, text)
+        e.candidate_selection(n=3)
+        e.candidate_weighting(df=df_pke)
+        methods["tfidf"] = scored(e)
+
+        e = load(pke.unsupervised.KPMiner, text)
+        e.candidate_selection(lasf=1, cutoff=400)
+        e.candidate_weighting(df=df_pke)
+        methods["kpminer"] = scored(e)
+
+        e = load(pke.unsupervised.KPMiner, text)
+        e.candidate_selection(lasf=2, cutoff=40)
+        e.candidate_weighting(df=df_pke)
+        methods["kpminer_lasf2_cutoff40"] = scored(e)
+
+        e = load(pke.unsupervised.FirstPhrases, text)
+        e.candidate_selection()
+        e.candidate_weighting()
+        methods["firstphrases"] = scored(e)
+
         e = load(pke.unsupervised.TopicalPageRank, text)
         e.candidate_selection()
         e.candidate_weighting(window=10, lda_model=(dictionary, model))
@@ -195,6 +232,15 @@ def main(out_path):
         "    pub doc_topics: &'static [f64],",
         "    pub methods: &'static [(&'static str, &'static [(&'static str, f64)])],",
         "}",
+        "",
+        f"pub const DF_DOCUMENTS: usize = {len(TEXTS)};",
+        "",
+        "pub const DF: &[(&str, usize)] = &[",
+    ]
+    for k in sorted(df):
+        lines.append(f"    ({rust_str(k)}, {df[k]}),")
+    lines += [
+        "];",
         "",
         "pub const CASES: &[Case] = &[",
     ]

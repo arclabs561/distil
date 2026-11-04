@@ -80,6 +80,14 @@ impl WordGraph {
         self
     }
 
+    /// Replace each edge weight `w` between nodes `i` and `j` by
+    /// `f(i, j, w)`.
+    pub fn reweight(&mut self, f: impl Fn(usize, usize, f64) -> f64) {
+        for (&(i, j), w) in self.edges.iter_mut() {
+            *w = f(i, j, *w);
+        }
+    }
+
     fn matrix(&self) -> Vec<Vec<f64>> {
         let n = self.nodes.len();
         let mut adj = vec![vec![0.0; n]; n];
