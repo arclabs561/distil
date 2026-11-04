@@ -124,6 +124,8 @@ pub fn stem(word: &str) -> String {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Document {
     sentences: Vec<Vec<Token>>,
+    /// Byte range of each sentence in the source text (from_text only).
+    spans: Vec<std::ops::Range<usize>>,
 }
 
 impl Document {
@@ -133,11 +135,19 @@ impl Document {
     /// inner `-`, `'` or `.` (so "state-of-the-art", "don't" and "3.5" stay
     /// whole); every other non-space character is its own token. A sentence
     /// ends at `.`, `!` or `?` followed by whitespace and an uppercase letter
-    /// or digit, or by the end of the text.
+    /// or digit, or by the end of the text. [`Document::sentence_spans`]
+    /// gives each sentence's byte range in `text`.
     pub fn from_text(text: &str) -> Document {
         let chars: Vec<char> = text.chars().collect();
+        let bytes: Vec<usize> = text
+            .char_indices()
+            .map(|(b, _)| b)
+            .chain(std::iter::once(text.len()))
+            .collect();
         let mut sentences = Vec::new();
+        let mut spans = Vec::new();
         let mut current: Vec<Token> = Vec::new();
+        let mut start = 0;
         let mut i = 0;
         while i < chars.len() {
             let c = chars[i];
@@ -145,8 +155,11 @@ impl Document {
                 i += 1;
                 continue;
             }
+            if current.is_empty() {
+                start = bytes[i];
+            }
             if c.is_alphanumeric() {
-                let start = i;
+                let first = i;
                 while i < chars.len() {
                     let joiner = matches!(chars[i], '-' | '\'' | '.' | '\u{2019}')
                         && i + 1 < chars.len()
@@ -157,7 +170,7 @@ impl Document {
                     }
                     i += 1;
                 }
-                let word: String = chars[start..i].iter().collect();
+                let word: String = chars[first..i].iter().collect();
                 current.push(Token::new(&word, None));
                 continue;
             }
@@ -173,19 +186,22 @@ impl Document {
                     !at_end && j > i && (chars[j].is_uppercase() || chars[j].is_numeric());
                 if at_end || next_starts {
                     sentences.push(std::mem::take(&mut current));
+                    spans.push(start..bytes[i]);
                 }
             }
         }
         if !current.is_empty() {
             sentences.push(current);
+            spans.push(start..text.trim_end().len());
         }
-        Document { sentences }
+        Document { sentences, spans }
     }
 
     /// Build from the caller's tokenizer and tagger: sentences of
     /// `(word, tag)` pairs. Stems are computed with [`stem`].
     pub fn from_tagged<S: AsRef<str>>(sentences: &[Vec<(S, Pos)>]) -> Document {
         Document {
+            spans: Vec::new(),
             sentences: sentences
                 .iter()
                 .map(|s| {
@@ -199,7 +215,16 @@ impl Document {
 
     /// Build from fully specified tokens, including stems.
     pub fn from_tokens(sentences: Vec<Vec<Token>>) -> Document {
-        Document { sentences }
+        Document {
+            sentences,
+            spans: Vec::new(),
+        }
+    }
+
+    /// Byte range of each sentence in the text given to
+    /// [`Document::from_text`]; empty for documents built from tokens.
+    pub fn sentence_spans(&self) -> &[std::ops::Range<usize>] {
+        &self.spans
     }
 
     /// The sentences.

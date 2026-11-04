@@ -1,15 +1,20 @@
-//! `distil`: keyphrases from files, URLs and stdin.
+//! `distil`: keyphrases and extractive summaries from files, URLs and stdin.
 
 mod input;
 
 use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use distil::summarize::{
+    Centroid, Edmundson, KlSum, Lead, LexRank, Lsa, LsaVariant, Luhn, Mmr, Random, Reduction,
+    SumBasic,
+};
 use distil::text::{is_content, stem, Document};
 use distil::{
     stopwords, CollabRank, DocumentFrequency, ExpandRank, FirstPhrases, KeywordExtractor, KpMiner,
     MultipartiteRank, PositionRank, RakeExtractor, SgRank, SingleRank, TextRank, TfIdf, TopicRank,
     TopicalPageRank, Yake,
 };
+use distil::{Budget, SentenceExtractor};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -18,7 +23,7 @@ use std::process::ExitCode;
 #[command(
     name = "distil",
     version,
-    about = "Keyphrase extraction from files, URLs and stdin"
+    about = "Keyphrase extraction and extractive summarization from files, URLs and stdin"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -29,9 +34,11 @@ struct Cli {
 enum Command {
     /// Rank the keyphrases of each input.
     Keywords(KeywordsArgs),
+    /// Pick the most important sentences of each input, in document order.
+    Summarize(SummarizeArgs),
     /// Print the text extracted from each input.
     Text(InputArgs),
-    /// List the keyphrase methods.
+    /// List the methods: name, kind (keyphrase or sentence), description.
     Methods,
 }
 
@@ -69,6 +76,114 @@ struct KeywordsArgs {
     /// {"source", "method", "keyphrases": [{"phrase", "score"}]}.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Args)]
+struct SummarizeArgs {
+    #[command(flatten)]
+    input: InputArgs,
+    /// Sentence method (see `distil methods`).
+    #[arg(short, long, value_enum, default_value_t = SentenceMethod::LexRank)]
+    method: SentenceMethod,
+    /// Number of sentences per input.
+    #[arg(
+        short = 'n',
+        long = "sentences",
+        default_value_t = 3,
+        conflicts_with = "words"
+    )]
+    sentences: usize,
+    /// Word budget per input instead of a sentence count.
+    #[arg(long)]
+    words: Option<usize>,
+    /// Stopword language: en, de, fr, es, pt, it, nl, ru or ar. Stemming
+    /// stays English.
+    #[arg(long, default_value = "en")]
+    lang: String,
+    /// One JSON object per input per line:
+    /// {"source", "method", "sentences": [{"index", "score", "text"}]}.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SentenceMethod {
+    #[value(alias = "lexrank")]
+    LexRank,
+    #[value(name = "lex-rank-continuous", alias = "lexrank-continuous")]
+    LexRankContinuous,
+    #[value(name = "text-rank", alias = "textrank")]
+    TextRank,
+    Lead,
+    Random,
+    Luhn,
+    #[value(alias = "sumbasic")]
+    SumBasic,
+    #[value(name = "kl-sum", alias = "klsum")]
+    KlSum,
+    Edmundson,
+    Lsa,
+    #[value(name = "lsa-gong-liu")]
+    LsaGongLiu,
+    Reduction,
+    Mmr,
+    Centroid,
+}
+
+impl SentenceMethod {
+    fn name(self) -> String {
+        self.to_possible_value()
+            .map(|v| v.get_name().to_string())
+            .unwrap_or_default()
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            SentenceMethod::LexRank => "random walk on a thresholded tf-idf cosine graph (default)",
+            SentenceMethod::LexRankContinuous => "random walk on the tf-idf cosine graph",
+            SentenceMethod::TextRank => "PageRank on a shared-word sentence graph",
+            SentenceMethod::Lead => "the first sentences",
+            SentenceMethod::Random => "random sentences, seed 0",
+            SentenceMethod::Luhn => "dense clusters of frequent words",
+            SentenceMethod::SumBasic => {
+                "greedy by average word probability, covered words discounted"
+            }
+            SentenceMethod::KlSum => "greedy, word distribution closest to the document's",
+            SentenceMethod::Edmundson => "position in the text (no title, cue or key words)",
+            SentenceMethod::Lsa => "length in the leading singular vectors",
+            SentenceMethod::LsaGongLiu => "one sentence per leading singular vector",
+            SentenceMethod::Reduction => "sum of shared-word similarities",
+            SentenceMethod::Mmr => "relevance to the document minus redundancy",
+            SentenceMethod::Centroid => "centroid words, position and first-sentence overlap",
+        }
+    }
+
+    fn extractor(self, stop: HashSet<String>) -> Box<dyn SentenceExtractor> {
+        match self {
+            SentenceMethod::LexRank => Box::new(LexRank::new().with_stopwords(stop)),
+            SentenceMethod::LexRankContinuous => {
+                Box::new(LexRank::new().continuous().with_stopwords(stop))
+            }
+            SentenceMethod::TextRank => {
+                Box::new(distil::summarize::TextRank::new().with_stopwords(stop))
+            }
+            SentenceMethod::Lead => Box::new(Lead::new()),
+            SentenceMethod::Random => Box::new(Random::new()),
+            SentenceMethod::Luhn => Box::new(Luhn::new().with_stopwords(stop)),
+            SentenceMethod::SumBasic => Box::new(SumBasic::new().with_stopwords(stop)),
+            SentenceMethod::KlSum => Box::new(KlSum::new().with_stopwords(stop)),
+            SentenceMethod::Edmundson => Box::new(Edmundson::new().with_stopwords(stop)),
+            SentenceMethod::Lsa => Box::new(Lsa::new().with_stopwords(stop)),
+            SentenceMethod::LsaGongLiu => Box::new(
+                Lsa::new()
+                    .with_stopwords(stop)
+                    .with_variant(LsaVariant::GongLiu),
+            ),
+            SentenceMethod::Reduction => Box::new(Reduction::new().with_stopwords(stop)),
+            SentenceMethod::Mmr => Box::new(Mmr::new().with_stopwords(stop)),
+            SentenceMethod::Centroid => Box::new(Centroid::new().with_stopwords(stop)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -136,6 +251,7 @@ fn main() -> ExitCode {
         Command::Methods => print_methods(),
         Command::Text(args) => text(&args),
         Command::Keywords(args) => keywords(&args),
+        Command::Summarize(args) => summarize(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -171,9 +287,85 @@ fn usage_error(kind: ErrorKind, message: impl std::fmt::Display) -> ! {
 fn print_methods() -> Result<(), Failure> {
     let mut out = io::stdout().lock();
     for m in Method::value_variants() {
-        writeln!(out, "{}\t{}", m.name(), m.description())?;
+        writeln!(out, "{}\tkeyphrase\t{}", m.name(), m.description())?;
+    }
+    for m in SentenceMethod::value_variants() {
+        writeln!(out, "{}\tsentence\t{}", m.name(), m.description())?;
     }
     Ok(())
+}
+
+/// Stopwords for `--lang`, or a usage error.
+fn stopwords_for(lang: &str) -> HashSet<String> {
+    stopwords::for_language(lang).unwrap_or_else(|| {
+        usage_error(
+            ErrorKind::InvalidValue,
+            format!("unsupported --lang {lang:?}; use en, de, fr, es, pt, it, nl, ru or ar"),
+        )
+    })
+}
+
+fn summarize(args: &SummarizeArgs) -> Result<(), Failure> {
+    let stop = stopwords_for(&args.lang);
+    let budget = match args.words {
+        Some(w) => Budget::Words(w),
+        None => Budget::Sentences(args.sentences),
+    };
+    let sources = sources(&args.input);
+    let texts = read_all(&sources, args.input.raw)?;
+    let method = args.method.extractor(stop);
+    let mut out = io::stdout().lock();
+    for (i, (source, text)) in sources.iter().zip(&texts).enumerate() {
+        let doc = Document::from_text(text);
+        let scores: HashMap<usize, f64> = method.rank(&doc).into_iter().collect();
+        let picked: Vec<(usize, f64, String)> = method
+            .summarize(&doc, budget)
+            .into_iter()
+            .map(|k| {
+                let span = doc.sentence_spans()[k].clone();
+                let text = text[span].split_whitespace().collect::<Vec<_>>().join(" ");
+                (k, scores[&k], text)
+            })
+            .collect();
+        if args.json {
+            let items: Vec<String> = picked
+                .iter()
+                .map(|(k, s, t)| {
+                    format!(
+                        "{{\"index\":{k},\"score\":{},\"text\":{}}}",
+                        json_number(*s),
+                        json_string(t)
+                    )
+                })
+                .collect();
+            writeln!(
+                out,
+                "{{\"source\":{},\"method\":{},\"sentences\":[{}]}}",
+                json_string(source),
+                json_string(&args.method.name()),
+                items.join(",")
+            )?;
+            continue;
+        }
+        if sources.len() > 1 {
+            if i > 0 {
+                writeln!(out)?;
+            }
+            writeln!(out, "== {source}")?;
+        }
+        for (_, _, t) in &picked {
+            writeln!(out, "{t}")?;
+        }
+    }
+    Ok(())
+}
+
+fn json_number(x: f64) -> String {
+    if x.is_finite() {
+        x.to_string()
+    } else {
+        "null".to_string()
+    }
 }
 
 /// Sources to read: the arguments, or stdin when there are none.
