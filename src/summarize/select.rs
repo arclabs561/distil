@@ -35,7 +35,7 @@ pub fn greedy(
             }
             let g = gain(i, &picked);
             let better = |b: f64| g > b && (b.is_infinite() || g - b > 1e-12 * b.abs().max(1.0));
-            if best.map_or(true, |(_, b)| better(b)) {
+            if best.is_none_or(|(_, b)| better(b)) {
                 best = Some((k, if g.is_nan() { f64::NEG_INFINITY } else { g }));
             }
         }

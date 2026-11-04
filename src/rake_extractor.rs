@@ -69,25 +69,25 @@ impl RakeExtractor {
         let mut candidates = Vec::new();
         let mut current_phrase = Vec::new();
 
-        // Punctuation ends a phrase, as in the RAKE paper's delimiter set;
-        // whitespace only separates words.
-        for segment in text.split(|c: char| !c.is_alphanumeric() && !c.is_whitespace() && c != '\'')
-        {
-            for word in segment.split_whitespace() {
-                let word_lower = word.to_lowercase();
-
-                if word.len() < self.min_word_length {
-                    continue;
-                }
-
-                if self.stopwords.contains(&word_lower) {
-                    self.flush_phrase(&mut current_phrase, &mut candidates);
-                } else {
-                    current_phrase.push(word_lower);
-                }
+        // Words are those of `text::word_ranges` (UAX #29); a punctuation
+        // token ends a phrase, as in the RAKE paper's delimiter set.
+        for range in crate::text::word_ranges(text) {
+            let word = &text[range];
+            if !word.chars().any(char::is_alphanumeric) {
+                self.flush_phrase(&mut current_phrase, &mut candidates);
+                continue;
             }
-            self.flush_phrase(&mut current_phrase, &mut candidates);
+            if word.len() < self.min_word_length {
+                continue;
+            }
+            let word_lower = word.to_lowercase();
+            if self.stopwords.contains(&word_lower) {
+                self.flush_phrase(&mut current_phrase, &mut candidates);
+            } else {
+                current_phrase.push(word_lower);
+            }
         }
+        self.flush_phrase(&mut current_phrase, &mut candidates);
 
         candidates
     }
@@ -214,6 +214,20 @@ mod tests {
         assert!(
             phrases.contains(&"subset".to_string()),
             "expected 'subset' in {phrases:?}"
+        );
+    }
+
+    #[test]
+    fn candidates_keep_hyphenated_words_and_decimals() {
+        let rake = RakeExtractor::new();
+        let candidates = rake.extract_candidates("A state-of-the-art model, version 3.5, works.");
+        assert_eq!(
+            candidates,
+            vec![
+                vec!["state-of-the-art".to_string(), "model".to_string()],
+                vec!["version".to_string(), "3.5".to_string()],
+                vec!["works".to_string()],
+            ]
         );
     }
 
