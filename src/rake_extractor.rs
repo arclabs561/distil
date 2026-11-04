@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{default_stopwords, KeywordExtractor};
+use crate::text::{Document, Roles, Stoplist};
+use crate::{KeywordExtractor, Language};
 
 /// RAKE keyword extractor.
 ///
@@ -22,7 +23,7 @@ use crate::{default_stopwords, KeywordExtractor};
 /// "Automatic Keyword Extraction from Individual Documents"
 #[derive(Debug, Clone)]
 pub struct RakeExtractor {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     min_word_length: usize,
     /// Minimum number of words in a candidate phrase.
     pub min_phrase_length: usize,
@@ -36,19 +37,51 @@ impl Default for RakeExtractor {
 }
 
 impl RakeExtractor {
-    /// Create a new RAKE extractor with default English stopwords.
+    /// Create a new RAKE extractor with English stopwords: NLTK's list
+    /// plus SMART (570 words) as delimiters, the list the RAKE paper's
+    /// widely used implementation splits on.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             min_word_length: 1,
             min_phrase_length: 1,
             max_phrase_length: 5,
         }
     }
 
+    /// rake-nltk's setup: NLTK's English list (and punctuation) as the only
+    /// delimiters, without the SMART extension that [`RakeExtractor::new`]
+    /// adds for English. For parity with rake-nltk.
+    pub fn nltk() -> Self {
+        Self::new().with_delimiters([""; 0])
+    }
+
     /// Set custom stopwords.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`]).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases, on top of the
+    /// stopwords. The default is the SMART list (570 words) in English and
+    /// nothing in other languages; [`RakeExtractor::nltk`] uses none. A list
+    /// given here applies to sentences in the method's language. RAKE uses
+    /// stopwords only as delimiters, so this is the same as adding the
+    /// words to the list.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -64,15 +97,47 @@ impl RakeExtractor {
         self
     }
 
-    /// Extract candidate phrases by splitting on stopwords and punctuation.
+    /// Up to `max` keyphrases of a document, best first. Each sentence is
+    /// split with the stopwords of its language, and phrases end at
+    /// sentence boundaries. `extract` instead reads the text as one run of
+    /// words in the method's language.
+    pub fn rank(&self, doc: &Document, max: usize) -> Vec<(String, f64)> {
+        let mut words = Vec::new();
+        for (sentence, language) in doc.sentences_in() {
+            words.extend(sentence.iter().map(|t| Some((t.word.as_str(), language))));
+            words.push(None);
+        }
+        self.score(&self.candidates(words), max)
+    }
+
+    /// Candidate phrases of `text`, whose words are those of
+    /// `text::word_ranges` (UAX #29), all in the method's language.
     fn extract_candidates(&self, text: &str) -> Vec<Vec<String>> {
+        let words = crate::text::word_ranges(text)
+            .into_iter()
+            .map(|r| Some((&text[r], None)));
+        self.candidates(words)
+    }
+
+    /// Extract candidate phrases by splitting on stopwords and punctuation.
+    /// `None` ends a phrase.
+    fn candidates<'a>(
+        &self,
+        words: impl IntoIterator<Item = Option<(&'a str, Option<&'a Language>)>>,
+    ) -> Vec<Vec<String>> {
         let mut candidates = Vec::new();
         let mut current_phrase = Vec::new();
+        // RAKE has no part-of-speech filter, so the delimiter extension
+        // applies to tagged text too.
+        let delimiting = self.stopwords.delimiting_untagged(true);
 
-        // Words are those of `text::word_ranges` (UAX #29); a punctuation
-        // token ends a phrase, as in the RAKE paper's delimiter set.
-        for range in crate::text::word_ranges(text) {
-            let word = &text[range];
+        // A punctuation token ends a phrase, as in the RAKE paper's
+        // delimiter set.
+        for item in words {
+            let Some((word, language)) = item else {
+                self.flush_phrase(&mut current_phrase, &mut candidates);
+                continue;
+            };
             if !word.chars().any(char::is_alphanumeric) {
                 self.flush_phrase(&mut current_phrase, &mut candidates);
                 continue;
@@ -81,7 +146,7 @@ impl RakeExtractor {
                 continue;
             }
             let word_lower = word.to_lowercase();
-            if self.stopwords.contains(&word_lower) {
+            if delimiting.is_stopword_in(word, language) {
                 self.flush_phrase(&mut current_phrase, &mut candidates);
             } else {
                 current_phrase.push(word_lower);
@@ -127,12 +192,18 @@ impl RakeExtractor {
 
 impl KeywordExtractor for RakeExtractor {
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        let candidates = self.extract_candidates(text);
-        let word_scores = self.compute_word_scores(&candidates);
+        self.score(&self.extract_candidates(text), max_keywords)
+    }
+}
+
+impl RakeExtractor {
+    /// Score candidates by degree over frequency and keep the best `max`.
+    fn score(&self, candidates: &[Vec<String>], max_keywords: usize) -> Vec<(String, f64)> {
+        let word_scores = self.compute_word_scores(candidates);
 
         let mut phrase_scores: HashMap<String, f64> = HashMap::new();
 
-        for phrase in &candidates {
+        for phrase in candidates {
             let phrase_text = phrase.join(" ");
             let score: f64 = phrase
                 .iter()
@@ -155,7 +226,17 @@ impl KeywordExtractor for RakeExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::default_stopwords;
     use crate::tests::{assert_score_properties, keyword_strings, GOLDEN_TEXT, TEST_TEXT};
+
+    #[test]
+    fn nltk_drops_the_smart_extension() {
+        let text = "Graph ranking provides keyphrases.";
+        let smart = keyword_strings(&RakeExtractor::new().extract(text, 5));
+        assert_eq!(smart, ["graph ranking", "keyphrases"]);
+        let nltk = keyword_strings(&RakeExtractor::nltk().extract(text, 5));
+        assert_eq!(nltk, ["graph ranking provides keyphrases"]);
+    }
 
     #[test]
     fn test_rake_extraction() {

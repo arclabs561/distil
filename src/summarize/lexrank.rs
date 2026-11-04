@@ -34,13 +34,13 @@
 
 use super::graph::{similarity_matrix, stationary, threshold};
 use super::{by_score, content_stems, cosine, counts, sentence_idf, weighted, SentenceExtractor};
-use crate::text::{is_content, Document};
+use crate::text::{is_content_in, Document, Roles};
 use std::collections::{HashMap, HashSet};
 
 /// LexRank, thresholded or continuous.
 #[derive(Debug, Clone)]
 pub struct LexRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     threshold: Option<f64>,
     jump: f64,
     idf: Option<(HashMap<String, f64>, f64)>,
@@ -57,7 +57,7 @@ impl LexRank {
     /// English stopwords.
     pub fn new() -> Self {
         LexRank {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             threshold: Some(0.1),
             jump: 0.15,
             idf: None,
@@ -66,7 +66,15 @@ impl LexRank {
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -96,7 +104,7 @@ impl LexRank {
 
     /// The graph's edge weights (after the threshold, if any).
     pub fn similarity(&self, doc: &Document) -> Vec<Vec<f64>> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let own = sentence_idf(&terms);
         let idf = |w: &str| self.idf_of(w, &own);
         let vectors = weighted(&counts(&terms), &idf);
@@ -150,9 +158,9 @@ impl BiasedLexRank {
     /// replaced by the bias.
     pub fn from_lexrank(lexrank: LexRank, query: &Document) -> Self {
         let query = query
-            .tokens()
-            .filter(|t| is_content(t, &lexrank.stopwords))
-            .map(|t| t.stem.clone())
+            .tokens_in()
+            .filter(|(t, l)| is_content_in(t, lexrank.stopwords.language(), *l))
+            .map(|(t, _)| t.stem.clone())
             .collect();
         BiasedLexRank {
             lexrank,
@@ -169,7 +177,7 @@ impl BiasedLexRank {
 
     /// `rel(s|q)` of each sentence, in document order.
     pub fn relevance(&self, doc: &Document) -> Vec<f64> {
-        let terms = content_stems(doc, &self.lexrank.stopwords);
+        let terms = content_stems(doc, self.lexrank.stopwords.language());
         let own = sentence_idf(&terms);
         let q: Vec<&str> = self.query.iter().map(String::as_str).collect();
         let qtf = &counts(&[q])[0];

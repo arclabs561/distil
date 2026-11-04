@@ -30,15 +30,15 @@
 //! - Ties are broken by first occurrence.
 
 use crate::graph::{pagerank, rank};
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use crate::topicrank::{cluster, proximity, topic_candidates};
-use crate::{default_stopwords, KeywordExtractor};
+use crate::KeywordExtractor;
 use std::collections::HashSet;
 
 /// MultipartiteRank keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct MultipartiteRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     threshold: f64,
     alpha: f64,
 }
@@ -53,7 +53,7 @@ impl MultipartiteRank {
     /// Clustering threshold 0.74, `alpha = 1.1`, English stopwords.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             threshold: 0.74,
             alpha: 1.1,
         }
@@ -61,7 +61,31 @@ impl MultipartiteRank {
 
     /// Stopwords for candidate filtering (and selection in untagged text).
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -83,7 +107,7 @@ impl MultipartiteRank {
 
     /// Up to `max` keyphrases, best first.
     pub fn rank(&self, doc: &Document, max: usize) -> Vec<(String, f64)> {
-        let candidates = topic_candidates(doc, &self.stopwords);
+        let candidates = topic_candidates(doc, &self.stopwords.delimiting(doc));
         let topics = cluster(&candidates, self.threshold);
         let n = candidates.len();
         let mut topic_of = vec![0; n];
@@ -131,7 +155,7 @@ impl MultipartiteRank {
 
 impl KeywordExtractor for MultipartiteRank {
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), max_keywords)
+        self.rank(&self.stopwords.document(text), max_keywords)
     }
 }
 
@@ -145,8 +169,10 @@ mod tests {
     #[test]
     fn promotion_favours_the_first_variant() {
         let doc = Document::from_text(TEXT);
-        let plain = MultipartiteRank::new().with_alpha(0.0).rank(&doc, 20);
-        let boosted = MultipartiteRank::new().rank(&doc, 20);
+        // NLTK-only boundaries: SMART's "needs" would split the second phrase.
+        let nltk = || MultipartiteRank::new().with_delimiters([""; 0]);
+        let plain = nltk().with_alpha(0.0).rank(&doc, 20);
+        let boosted = nltk().rank(&doc, 20);
         let score = |r: &[(String, f64)], p: &str| r.iter().find(|(q, _)| q == p).unwrap().1;
         let first = "neural networks model language";
         let second = "neural network needs data";

@@ -12,13 +12,13 @@
 //! of Research and Development 2(2), 1958. Parity: sumy `LuhnSummarizer`.
 
 use super::{by_score, content_stems, term_counts, SentenceExtractor};
-use crate::text::{is_content, Document};
+use crate::text::{is_content_in, Document, Roles};
 use std::collections::HashSet;
 
 /// Luhn's significance-cluster score.
 #[derive(Debug, Clone)]
 pub struct Luhn {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     max_gap: usize,
     min_count: usize,
 }
@@ -33,7 +33,7 @@ impl Luhn {
     /// English stopwords, a gap of 4, stems occurring at least twice.
     pub fn new() -> Self {
         Luhn {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             max_gap: 4,
             min_count: 2,
         }
@@ -41,7 +41,15 @@ impl Luhn {
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -60,16 +68,15 @@ impl Luhn {
 
 impl SentenceExtractor for Luhn {
     fn rank(&self, doc: &Document) -> Vec<(usize, f64)> {
-        let freq = term_counts(&content_stems(doc, &self.stopwords));
+        let freq = term_counts(&content_stems(doc, self.stopwords.language()));
         let scores = doc
-            .sentences()
-            .iter()
-            .map(|s| {
+            .sentences_in()
+            .map(|(s, l)| {
                 let flags: Vec<bool> = s
                     .iter()
                     .filter(|t| !t.is_punct())
                     .map(|t| {
-                        is_content(t, &self.stopwords)
+                        is_content_in(t, self.stopwords.language(), l)
                             && freq
                                 .get(t.stem.as_str())
                                 .is_some_and(|&c| c >= self.min_count)

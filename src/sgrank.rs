@@ -37,15 +37,15 @@
 //! - Ties are broken by first occurrence.
 
 use crate::graph::{pagerank, rank};
-use crate::text::{is_content, ngrams_where, Candidate, Document, Pos};
+use crate::text::{is_content_in, ngrams_where_in, Candidate, Document, Pos, Roles};
 use crate::tfidf::DocumentFrequency;
-use crate::{default_stopwords, KeywordExtractor};
+use crate::KeywordExtractor;
 use std::collections::HashSet;
 
 /// SGRank keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct SgRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     top: usize,
     cutoff: f64,
     window: usize,
@@ -61,7 +61,7 @@ impl SgRank {
     /// `T = 100`, `cutoff = 3000`, `winSize = 1500`, English stopwords.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             top: 100,
             cutoff: 3000.0,
             window: 1500,
@@ -70,7 +70,31 @@ impl SgRank {
 
     /// Stopwords excluded from candidates.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -88,8 +112,9 @@ impl SgRank {
         max: usize,
     ) -> Vec<(String, f64)> {
         let tagged = doc.is_tagged();
-        let keep = |t: &crate::text::Token| {
-            is_content(t, &self.stopwords)
+        let delimiting = self.stopwords.delimiting(doc);
+        let keep = |t: &crate::text::Token, l: Option<&crate::Language>| {
+            is_content_in(t, &delimiting, l)
                 && (!tagged
                     || t.pos
                         .is_some_and(|p| p.is_noun_or_adjective() || p == Pos::Verb))
@@ -100,7 +125,7 @@ impl SgRank {
             1500..=4000 => 2,
             _ => 3,
         };
-        let mut cands = ngrams_where(doc, keep, 6);
+        let mut cands = ngrams_where_in(doc, keep, 6);
         cands.retain(|c| c.offsets.len() >= min_tf);
         let idf = |c: &Candidate| match df {
             None => 1.0,
@@ -165,7 +190,7 @@ impl SgRank {
 
 impl KeywordExtractor for SgRank {
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), max_keywords)
+        self.rank(&self.stopwords.document(text), max_keywords)
     }
 }
 

@@ -8,14 +8,14 @@ use distil::summarize::{
     Centroid, Edmundson, KlSum, Lead, LexRank, Lsa, LsaVariant, Luhn, Mmr, Random, Reduction,
     SumBasic,
 };
-use distil::text::{is_content, stem, Document};
+use distil::text::{is_content_in, Document, Token};
 use distil::{
-    stopwords, CollabRank, DocumentFrequency, ExpandRank, FirstPhrases, KeywordExtractor, KpMiner,
-    MultipartiteRank, PositionRank, RakeExtractor, SgRank, SingleRank, TextRank, TfIdf, TopicRank,
-    TopicalPageRank, Yake,
+    stopwords, CollabRank, ExpandRank, FirstPhrases, KeywordExtractor, KpMiner, Language,
+    LanguagePolicy, MultipartiteRank, PositionRank, RakeExtractor, SgRank, SingleRank, TextRank,
+    TfIdf, TopicRank, TopicalPageRank, Yake,
 };
 use distil::{Budget, SentenceExtractor};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
@@ -63,10 +63,11 @@ struct KeywordsArgs {
     /// Number of keyphrases per input.
     #[arg(short = 'k', long = "top", default_value_t = 10)]
     top: usize,
-    /// Stopword language as an ISO 639-1 code (en, de, fr, es, ...; an
-    /// unknown code lists them), or `auto` to detect it from the inputs
-    /// (whatlang; English when detection is unreliable). Stemming stays
-    /// English.
+    /// Language as an ISO 639-1 code (en, de, fr, es, ...; an unknown code
+    /// lists them): its stopwords and Snowball stemmer. `auto` detects one
+    /// language per input; `auto-sentence` detects each sentence's language
+    /// (an input's language for sentences too short to call). Detection is
+    /// whatlang's best guess; English when there is none.
     #[arg(long, default_value = "en")]
     lang: String,
     /// Word-topic distributions for topical-page-rank: one line per word,
@@ -98,10 +99,11 @@ struct SummarizeArgs {
     /// Word budget per input instead of a sentence count.
     #[arg(long)]
     words: Option<usize>,
-    /// Stopword language as an ISO 639-1 code (en, de, fr, es, ...; an
-    /// unknown code lists them), or `auto` to detect it from the inputs
-    /// (whatlang; English when detection is unreliable). Stemming stays
-    /// English.
+    /// Language as an ISO 639-1 code (en, de, fr, es, ...; an unknown code
+    /// lists them): its stopwords and Snowball stemmer. `auto` detects one
+    /// language per input; `auto-sentence` detects each sentence's language
+    /// (an input's language for sentences too short to call). Detection is
+    /// whatlang's best guess; English when there is none.
     #[arg(long, default_value = "en")]
     lang: String,
     /// One JSON object per input per line:
@@ -162,30 +164,30 @@ impl SentenceMethod {
         }
     }
 
-    fn extractor(self, stop: HashSet<String>) -> Box<dyn SentenceExtractor> {
+    fn extractor(self, lang: Language) -> Box<dyn SentenceExtractor> {
         match self {
-            SentenceMethod::LexRank => Box::new(LexRank::new().with_stopwords(stop)),
+            SentenceMethod::LexRank => Box::new(LexRank::new().with_language(lang)),
             SentenceMethod::LexRankContinuous => {
-                Box::new(LexRank::new().continuous().with_stopwords(stop))
+                Box::new(LexRank::new().continuous().with_language(lang))
             }
             SentenceMethod::TextRank => {
-                Box::new(distil::summarize::TextRank::new().with_stopwords(stop))
+                Box::new(distil::summarize::TextRank::new().with_language(lang))
             }
             SentenceMethod::Lead => Box::new(Lead::new()),
             SentenceMethod::Random => Box::new(Random::new()),
-            SentenceMethod::Luhn => Box::new(Luhn::new().with_stopwords(stop)),
-            SentenceMethod::SumBasic => Box::new(SumBasic::new().with_stopwords(stop)),
-            SentenceMethod::KlSum => Box::new(KlSum::new().with_stopwords(stop)),
-            SentenceMethod::Edmundson => Box::new(Edmundson::new().with_stopwords(stop)),
-            SentenceMethod::Lsa => Box::new(Lsa::new().with_stopwords(stop)),
+            SentenceMethod::Luhn => Box::new(Luhn::new().with_language(lang)),
+            SentenceMethod::SumBasic => Box::new(SumBasic::new().with_language(lang)),
+            SentenceMethod::KlSum => Box::new(KlSum::new().with_language(lang)),
+            SentenceMethod::Edmundson => Box::new(Edmundson::new().with_language(lang)),
+            SentenceMethod::Lsa => Box::new(Lsa::new().with_language(lang)),
             SentenceMethod::LsaGongLiu => Box::new(
                 Lsa::new()
-                    .with_stopwords(stop)
+                    .with_language(lang)
                     .with_variant(LsaVariant::GongLiu),
             ),
-            SentenceMethod::Reduction => Box::new(Reduction::new().with_stopwords(stop)),
-            SentenceMethod::Mmr => Box::new(Mmr::new().with_stopwords(stop)),
-            SentenceMethod::Centroid => Box::new(Centroid::new().with_stopwords(stop)),
+            SentenceMethod::Reduction => Box::new(Reduction::new().with_language(lang)),
+            SentenceMethod::Mmr => Box::new(Mmr::new().with_language(lang)),
+            SentenceMethod::Centroid => Box::new(Centroid::new().with_language(lang)),
         }
     }
 }
@@ -299,88 +301,76 @@ fn print_methods() -> Result<(), Failure> {
     Ok(())
 }
 
-/// Exits with a usage error unless `--lang` is `auto` or has stopwords.
-fn check_lang(lang: &str) {
-    if lang != "auto" {
-        stopwords_for(lang, &[]);
+/// The language policy for `--lang`, or a usage error.
+fn policy(lang: &str) -> LanguagePolicy {
+    match lang {
+        "auto" => LanguagePolicy::Detect,
+        "auto-sentence" => LanguagePolicy::DetectPerSentence {
+            fallback: Language::english(),
+        },
+        code => LanguagePolicy::Fixed(Language::from_code(code).unwrap_or_else(|| {
+            usage_error(
+                ErrorKind::InvalidValue,
+                format!(
+                    "unsupported --lang {code:?}; use auto, auto-sentence or one of {}",
+                    stopwords::languages().join(", ")
+                ),
+            )
+        })),
     }
 }
 
-/// The ISO 639-1 code of the language whatlang detects in `text`, if the
-/// detection is reliable and NLTK has stopwords for that language.
-fn detect_language(text: &str) -> Option<&'static str> {
-    use whatlang::Lang::*;
-    let info = whatlang::detect(text).filter(whatlang::Info::is_reliable)?;
-    Some(match info.lang() {
-        Ara => "ar",
-        Aze => "az",
-        Bel => "be",
-        Ben => "bn",
-        Cat => "ca",
-        Cmn => "zh",
-        Dan => "da",
-        Deu => "de",
-        Ell => "el",
-        Eng => "en",
-        Fin => "fi",
-        Fra => "fr",
-        Heb => "he",
-        Hun => "hu",
-        Ind => "id",
-        Ita => "it",
-        Nep => "ne",
-        Nld => "nl",
-        Nob => "no",
-        Por => "pt",
-        Ron => "ro",
-        Rus => "ru",
-        Slv => "sl",
-        Spa => "es",
-        Swe => "sv",
-        Tam => "ta",
-        Tur => "tr",
-        Uzb => "uz",
-        _ => return None,
-    })
+/// The methods' own language: the fixed one, or English when documents
+/// carry detected languages (their sentences then use their own lists).
+fn method_language(policy: &LanguagePolicy) -> Language {
+    match policy {
+        LanguagePolicy::Fixed(lang) => lang.clone(),
+        _ => Language::english(),
+    }
 }
 
-/// Stopwords for `--lang`, or a usage error. `auto` detects the language of
-/// all `texts` together and falls back to English.
-fn stopwords_for(lang: &str, texts: &[String]) -> HashSet<String> {
-    let lang = if lang == "auto" {
-        detect_language(&texts.join("\n")).unwrap_or_else(|| {
-            eprintln!("distil: no supported language detected; using en stopwords");
-            "en"
-        })
-    } else {
-        lang
-    };
-    stopwords::for_language(lang).unwrap_or_else(|| {
-        usage_error(
-            ErrorKind::InvalidValue,
-            format!(
-                "unsupported --lang {lang:?}; use auto or one of {}",
-                stopwords::languages().join(", ")
-            ),
-        )
-    })
+/// Each text as a document under `policy`. Says on stderr when detection
+/// found no language for a whole input.
+fn documents(texts: &[String], sources: &[String], policy: &LanguagePolicy) -> Vec<Document> {
+    if !matches!(policy, LanguagePolicy::Fixed(_)) {
+        for (source, text) in sources.iter().zip(texts) {
+            if textprep::language::detect(text).is_none() {
+                eprintln!("distil: {source}: no supported language detected; using en");
+            }
+        }
+    }
+    texts
+        .iter()
+        .map(|t| Document::from_text_with(t, policy))
+        .collect()
+}
+
+/// Tokens that are neither punctuation nor stopwords of their sentence.
+fn content_tokens<'a>(doc: &'a Document, lang: &'a Language) -> impl Iterator<Item = &'a Token> {
+    let langs = doc.sentence_languages();
+    doc.sentences()
+        .iter()
+        .enumerate()
+        .flat_map(move |(i, s)| s.iter().map(move |t| (t, langs.get(i))))
+        .filter(move |(t, l)| is_content_in(t, lang, *l))
+        .map(|(t, _)| t)
 }
 
 fn summarize(args: &SummarizeArgs) -> Result<(), Failure> {
-    check_lang(&args.lang);
+    let policy = policy(&args.lang);
     let budget = match args.words {
         Some(w) => Budget::Words(w),
         None => Budget::Sentences(args.sentences),
     };
     let sources = sources(&args.input);
     let texts = read_all(&sources, args.input.raw)?;
-    let method = args.method.extractor(stopwords_for(&args.lang, &texts));
+    let method = args.method.extractor(method_language(&policy));
+    let docs = documents(&texts, &sources, &policy);
     let mut out = io::stdout().lock();
-    for (i, (source, text)) in sources.iter().zip(&texts).enumerate() {
-        let doc = Document::from_text(text);
-        let scores: HashMap<usize, f64> = method.rank(&doc).into_iter().collect();
+    for (i, ((source, text), doc)) in sources.iter().zip(&texts).zip(&docs).enumerate() {
+        let scores: HashMap<usize, f64> = method.rank(doc).into_iter().collect();
         let picked: Vec<(usize, f64, String)> = method
-            .summarize(&doc, budget)
+            .summarize(doc, budget)
             .into_iter()
             .map(|k| {
                 let span = doc.sentence_spans()[k].clone();
@@ -472,9 +462,10 @@ fn text(args: &InputArgs) -> Result<(), Failure> {
 }
 
 fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
-    check_lang(&args.lang);
+    let policy = policy(&args.lang);
+    let lang = method_language(&policy);
     let topics = match (&args.topics, args.method) {
-        (Some(path), Method::TopicalPageRank) => Some(read_topics(path)?),
+        (Some(path), Method::TopicalPageRank) => Some(read_topics(path, &lang)?),
         (None, Method::TopicalPageRank) => usage_error(
             ErrorKind::MissingRequiredArgument,
             "topical-page-rank needs --topics <FILE>: one line per word, the word, a tab, \
@@ -498,8 +489,17 @@ fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
         );
     }
     let texts = read_all(&sources, args.input.raw)?;
-    let stop = stopwords_for(&args.lang, &texts);
-    let ranked = rank(args.method, &texts, args.top, stop, topics.as_ref());
+    let docs = documents(&texts, &sources, &policy);
+    let fixed = matches!(policy, LanguagePolicy::Fixed(_));
+    let ranked = rank(
+        args.method,
+        &texts,
+        &docs,
+        fixed,
+        args.top,
+        lang,
+        topics.as_ref(),
+    );
 
     let mut out = io::stdout().lock();
     for (i, (source, phrases)) in sources.iter().zip(&ranked).enumerate() {
@@ -521,41 +521,67 @@ fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
 }
 
 /// Keyphrases of each text. ExpandRank uses the other texts as neighbours
-/// and CollabRank all texts as one cluster.
+/// and CollabRank all texts as one cluster. With a fixed language,
+/// single-text methods read the text directly (`extract`); otherwise they
+/// rank the documents, whose sentences carry detected languages.
 fn rank(
     method: Method,
     texts: &[String],
+    docs: &[Document],
+    fixed: bool,
     k: usize,
-    stop: HashSet<String>,
+    lang: Language,
     topics: Option<&HashMap<String, Vec<f64>>>,
 ) -> Vec<Vec<(String, f64)>> {
-    let docs = || -> Vec<Document> { texts.iter().map(|t| Document::from_text(t)).collect() };
+    let each = |f: &dyn Fn(&Document) -> Vec<(String, f64)>| docs.iter().map(f).collect();
     let single: Box<dyn KeywordExtractor> = match method {
-        Method::PositionRank => Box::new(PositionRank::new().with_stopwords(stop)),
-        Method::TextRank => Box::new(TextRank::new().with_stopwords(stop)),
-        Method::SingleRank => Box::new(SingleRank::new().with_stopwords(stop)),
-        Method::TopicRank => Box::new(TopicRank::new().with_stopwords(stop)),
-        Method::MultipartiteRank => Box::new(MultipartiteRank::new().with_stopwords(stop)),
-        Method::Rake => Box::new(RakeExtractor::new().with_stopwords(stop)),
-        Method::Yake => Box::new(Yake::new().with_stopwords(stop)),
+        Method::PositionRank => {
+            let m = PositionRank::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::TextRank => {
+            let m = TextRank::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::SingleRank => {
+            let m = SingleRank::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::TopicRank => {
+            let m = TopicRank::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::MultipartiteRank => {
+            let m = MultipartiteRank::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::SgRank => {
+            let m = SgRank::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::FirstPhrases => {
+            let m = FirstPhrases::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::Rake if !fixed => {
+            let m = RakeExtractor::new().with_language(lang);
+            return each(&|d| m.rank(d, k));
+        }
+        Method::Rake => Box::new(RakeExtractor::new().with_language(lang)),
+        Method::Yake => Box::new(Yake::new().with_language(lang)),
         Method::TfIdf => {
-            let docs = docs();
-            let df = DocumentFrequency::from_documents(&docs, &stop, 3);
-            let tfidf = TfIdf::new().with_stopwords(stop);
-            return docs.iter().map(|d| tfidf.rank(d, &df, k)).collect();
+            let tfidf = TfIdf::new().with_language(lang);
+            let df = tfidf.document_frequency(docs);
+            return each(&|d| tfidf.rank(d, &df, k));
         }
         Method::KpMiner => {
-            let docs = docs();
-            let df = DocumentFrequency::from_documents(&docs, &stop, 5);
-            let kpminer = KpMiner::new().with_stopwords(stop);
-            return docs.iter().map(|d| kpminer.rank(d, &df, k)).collect();
+            let kpminer = KpMiner::new().with_language(lang);
+            let df = kpminer.document_frequency(docs);
+            return each(&|d| kpminer.rank(d, &df, k));
         }
-        Method::SgRank => Box::new(SgRank::new().with_stopwords(stop)),
-        Method::FirstPhrases => Box::new(FirstPhrases::new().with_stopwords(stop)),
         Method::ExpandRank => {
-            let docs = docs();
-            let sims = similarities(&docs, &stop);
-            let er = ExpandRank::new().with_stopwords(stop);
+            let sims = similarities(docs, &lang);
+            let er = ExpandRank::new().with_language(lang);
             return docs
                 .iter()
                 .enumerate()
@@ -569,31 +595,37 @@ fn rank(
                 .collect();
         }
         Method::CollabRank => {
-            return CollabRank::new()
-                .with_stopwords(stop)
-                .rank_cluster(&docs(), k);
+            return CollabRank::new().with_language(lang).rank_cluster(docs, k);
         }
         Method::TopicalPageRank => {
             let word_topics = topics.expect("checked before reading inputs");
-            let tpr = TopicalPageRank::new().with_stopwords(stop.clone());
-            return docs()
-                .iter()
-                .map(|d| tpr.rank(d, word_topics, &fold_in(d, word_topics, &stop), k))
-                .collect();
+            let tpr = TopicalPageRank::new().with_language(lang.clone());
+            return each(&|d| tpr.rank(d, word_topics, &fold_in(d, word_topics, &lang), k));
         }
     };
-    texts.iter().map(|t| single.extract(t, k)).collect()
+    if fixed {
+        return texts.iter().map(|t| single.extract(t, k)).collect();
+    }
+    // YAKE: its document ranking returns raw scores (lower is better);
+    // `extract` reports 1 / (1 + S).
+    let yake = Yake::new();
+    each(&|d| {
+        yake.rank(d, k)
+            .into_iter()
+            .map(|(p, h)| (p, 1.0 / (1.0 + h)))
+            .collect()
+    })
 }
 
 /// Pairwise TF-IDF cosine similarity of the documents' content stems, with
 /// smoothed IDF `ln((1 + n) / (1 + df)) + 1` so that two or three inputs
 /// sharing a word still count as similar.
-fn similarities(docs: &[Document], stop: &HashSet<String>) -> Vec<Vec<f64>> {
+fn similarities(docs: &[Document], lang: &Language) -> Vec<Vec<f64>> {
     let tfs: Vec<HashMap<&str, f64>> = docs
         .iter()
         .map(|d| {
             let mut tf = HashMap::new();
-            for t in d.tokens().filter(|t| is_content(t, stop)) {
+            for t in content_tokens(d, lang) {
                 *tf.entry(t.stem.as_str()).or_insert(0.0) += 1.0;
             }
             tf
@@ -626,8 +658,9 @@ fn similarities(docs: &[Document], stop: &HashSet<String>) -> Vec<Vec<f64>> {
         .collect()
 }
 
-/// Word-topic vectors keyed by the word as written and by its stem.
-fn read_topics(path: &str) -> Result<HashMap<String, Vec<f64>>, Failure> {
+/// Word-topic vectors keyed by the word as written and by its stem in
+/// `lang`.
+fn read_topics(path: &str, lang: &Language) -> Result<HashMap<String, Vec<f64>>, Failure> {
     let fail = |message: String| Failure::Input {
         source: path.to_string(),
         message,
@@ -655,7 +688,8 @@ fn read_topics(path: &str) -> Result<HashMap<String, Vec<f64>>, Failure> {
             return Err(bad("topic count differs from the first line"));
         }
         let word = word.trim().to_lowercase();
-        out.entry(stem(&word)).or_insert_with(|| values.clone());
+        out.entry(lang.stem(&word))
+            .or_insert_with(|| values.clone());
         out.insert(word, values);
     }
     if out.is_empty() {
@@ -666,14 +700,10 @@ fn read_topics(path: &str) -> Result<HashMap<String, Vec<f64>>, Failure> {
 
 /// `P(Z|d)` estimated from the word-topic model: the sum of `P(w|Z)` over
 /// the document's content words. TopicalPageRank only uses its direction.
-fn fold_in(
-    doc: &Document,
-    word_topics: &HashMap<String, Vec<f64>>,
-    stop: &HashSet<String>,
-) -> Vec<f64> {
+fn fold_in(doc: &Document, word_topics: &HashMap<String, Vec<f64>>, lang: &Language) -> Vec<f64> {
     let width = word_topics.values().next().map_or(0, Vec::len);
     let mut sum = vec![0.0; width];
-    for t in doc.tokens().filter(|t| is_content(t, stop)) {
+    for t in content_tokens(doc, lang) {
         if let Some(v) = word_topics.get(&t.stem) {
             sum.iter_mut().zip(v).for_each(|(s, x)| *s += x);
         }
@@ -738,7 +768,7 @@ mod tests {
         .iter()
         .map(|t| Document::from_text(t))
         .collect();
-        let sims = similarities(&docs, &distil::default_stopwords());
+        let sims = similarities(&docs, &Language::english());
         assert!(sims[0][1] > 0.0);
         assert_eq!(sims[0][2], 0.0);
         assert!((sims[0][0] - 1.0).abs() < 1e-9);

@@ -17,7 +17,7 @@
 //! [`summarize`]: SentenceExtractor::summarize
 //! [`Token::stem`]: crate::text::Token::stem
 
-use crate::text::{is_content, Document, Token};
+use crate::text::{is_content_in, Document, Stoplist, Token};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub mod centroid;
@@ -106,12 +106,14 @@ pub fn word_count(sentence: &[Token]) -> usize {
 }
 
 /// Stems of the content words of each sentence, in order.
-pub(crate) fn content_stems<'a>(doc: &'a Document, stop: &HashSet<String>) -> Vec<Vec<&'a str>> {
-    doc.sentences()
-        .iter()
-        .map(|s| {
+pub(crate) fn content_stems<'a>(
+    doc: &'a Document,
+    stop: &(impl Stoplist + ?Sized),
+) -> Vec<Vec<&'a str>> {
+    doc.sentences_in()
+        .map(|(s, l)| {
             s.iter()
-                .filter(|t| is_content(t, stop))
+                .filter(|t| is_content_in(t, stop, l))
                 .map(|t| t.stem.as_str())
                 .collect()
         })

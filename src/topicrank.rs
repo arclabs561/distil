@@ -36,15 +36,16 @@
 
 use crate::graph::{pagerank, rank};
 use crate::text::{
-    delimited_phrases, filter_candidates, longest_sequences, Candidate, Document, Pos,
+    delimited_phrases, filter_candidates_in, longest_sequences, Candidate, Document, Pos, Roles,
+    Stoplist,
 };
-use crate::{default_stopwords, KeywordExtractor};
+use crate::KeywordExtractor;
 use std::collections::{HashMap, HashSet};
 
 /// TopicRank keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct TopicRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     threshold: f64,
 }
 
@@ -58,14 +59,38 @@ impl TopicRank {
     /// Clustering threshold 0.74, English stopwords.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             threshold: 0.74,
         }
     }
 
     /// Stopwords for candidate filtering (and selection in untagged text).
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`]).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -80,7 +105,7 @@ impl TopicRank {
     /// Candidates grouped into topics, each topic a list of candidates in
     /// order of first occurrence; topics are ordered the same way.
     pub fn topics(&self, doc: &Document) -> Vec<Vec<Candidate>> {
-        let candidates = topic_candidates(doc, &self.stopwords);
+        let candidates = topic_candidates(doc, &self.stopwords.delimiting(doc));
         let clusters = cluster(&candidates, self.threshold);
         clusters
             .into_iter()
@@ -110,13 +135,16 @@ impl TopicRank {
 
 /// Longest noun/adjective sequences (tagged) or delimited phrases, then
 /// pke's candidate filter with at most five words.
-pub(crate) fn topic_candidates(doc: &Document, stopwords: &HashSet<String>) -> Vec<Candidate> {
+pub(crate) fn topic_candidates(
+    doc: &Document,
+    stopwords: &(impl Stoplist + ?Sized),
+) -> Vec<Candidate> {
     let raw = if doc.is_tagged() {
         longest_sequences(doc, |t| t.pos.is_some_and(Pos::is_noun_or_adjective))
     } else {
         delimited_phrases(doc, stopwords, 5)
     };
-    filter_candidates(raw, stopwords, 5)
+    filter_candidates_in(doc, raw, stopwords, 5)
 }
 
 /// Sum of `1 / gap` over all occurrence pairs of two candidates.
@@ -241,7 +269,7 @@ pub(crate) fn cluster(candidates: &[Candidate], threshold: f64) -> Vec<Vec<usize
 
 impl KeywordExtractor for TopicRank {
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), max_keywords)
+        self.rank(&self.stopwords.document(text), max_keywords)
     }
 }
 
@@ -301,7 +329,9 @@ mod tests {
     fn ties_resolve_like_scipy_nn_chain() {
         let text = "Neural networks model language. A neural network needs data. \
                     Language models predict words.";
+        // NLTK-only boundaries: SMART's "needs" would split B.
         let topics: Vec<Vec<String>> = TopicRank::new()
+            .with_delimiters([""; 0])
             .topics(&Document::from_text(text))
             .into_iter()
             .map(|t| t.into_iter().map(|c| c.surface).collect())

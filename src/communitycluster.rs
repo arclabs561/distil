@@ -32,15 +32,14 @@
 //!   Girvan's algorithm; ties remove the edge with the smallest node pair.
 //! - Ties between terms are broken by first occurrence.
 
-use crate::default_stopwords;
 use crate::graph::rank;
-use crate::text::{delimited_phrases, noun_phrases, Candidate, Document};
+use crate::text::{delimited_phrases, noun_phrases, Candidate, Document, Roles};
 use std::collections::{HashSet, VecDeque};
 
 /// CommunityCluster keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct CommunityCluster {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     window: usize,
 }
 
@@ -54,14 +53,37 @@ impl CommunityCluster {
     /// Window 10, English stopwords for untagged text.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             window: 10,
         }
     }
 
     /// Stopwords used for untagged text.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -76,7 +98,7 @@ impl CommunityCluster {
         if doc.is_tagged() {
             noun_phrases(doc, usize::MAX)
         } else {
-            delimited_phrases(doc, &self.stopwords, 5)
+            delimited_phrases(doc, &self.stopwords.delimiting(doc), 5)
         }
     }
 

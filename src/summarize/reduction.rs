@@ -11,13 +11,13 @@
 
 use super::graph::similarity_matrix;
 use super::{by_score, content_stems, SentenceExtractor};
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use std::collections::HashSet;
 
 /// sumy's Reduction.
 #[derive(Debug, Clone)]
 pub struct Reduction {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
 }
 
 impl Default for Reduction {
@@ -30,20 +30,28 @@ impl Reduction {
     /// English stopwords.
     pub fn new() -> Self {
         Reduction {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
         }
     }
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 }
 
 impl SentenceExtractor for Reduction {
     fn rank(&self, doc: &Document) -> Vec<(usize, f64)> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let m = similarity_matrix(terms.len(), false, |i, j| {
             let pairs = terms[i]
                 .iter()

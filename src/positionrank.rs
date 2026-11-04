@@ -29,15 +29,15 @@
 //!   iterations). Dangling nodes teleport by the bias vector, as networkx
 //!   does.
 
-use crate::graph::{is_graph_word, rank_by_word_sum, WordGraph};
-use crate::text::{delimited_phrases, noun_phrases, Document};
-use crate::{default_stopwords, KeywordExtractor};
+use crate::graph::{graph_words, rank_by_word_sum, WordGraph};
+use crate::text::{delimited_phrases, noun_phrases, Document, Roles};
+use crate::KeywordExtractor;
 use std::collections::{HashMap, HashSet};
 
 /// PositionRank keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct PositionRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     window: usize,
     max_words: usize,
 }
@@ -53,7 +53,7 @@ impl PositionRank {
     /// untagged text.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             window: 10,
             max_words: 3,
         }
@@ -61,7 +61,31 @@ impl PositionRank {
 
     /// Stopwords used for untagged text.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -79,12 +103,12 @@ impl PositionRank {
 
     /// Position-biased score of each graph word (stem).
     pub fn word_scores(&self, doc: &Document) -> HashMap<String, f64> {
-        let accept = |t: &crate::text::Token| is_graph_word(t, &self.stopwords);
+        let accept = graph_words(self.stopwords.language());
         let mut g = WordGraph::default();
         g.add_document(doc, &accept, self.window, 1.0);
         let mut bias: HashMap<&str, f64> = HashMap::new();
-        for (i, t) in doc.tokens().enumerate() {
-            if accept(t) {
+        for (i, (t, l)) in doc.tokens_in().enumerate() {
+            if accept(t, l) {
                 *bias.entry(t.stem.as_str()).or_insert(0.0) += 1.0 / (i + 1) as f64;
             }
         }
@@ -97,7 +121,7 @@ impl PositionRank {
         let candidates = if doc.is_tagged() {
             noun_phrases(doc, self.max_words)
         } else {
-            delimited_phrases(doc, &self.stopwords, self.max_words)
+            delimited_phrases(doc, &self.stopwords.delimiting(doc), self.max_words)
         };
         rank_by_word_sum(&candidates, &self.word_scores(doc), max)
     }
@@ -105,7 +129,7 @@ impl PositionRank {
 
 impl KeywordExtractor for PositionRank {
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), max_keywords)
+        self.rank(&self.stopwords.document(text), max_keywords)
     }
 }
 

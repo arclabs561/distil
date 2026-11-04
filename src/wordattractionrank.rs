@@ -30,16 +30,15 @@
 //!   the vectors coincide, the distance is taken as 1.
 //! - Ties are broken by first occurrence.
 
-use crate::default_stopwords;
-use crate::graph::{is_graph_word, rank_by_word_sum, WordGraph};
+use crate::graph::{graph_words, rank_by_word_sum, WordGraph};
 use crate::singlerank::noun_adjective_runs;
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use std::collections::{HashMap, HashSet};
 
 /// WordAttractionRank keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct WordAttractionRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     window: usize,
 }
 
@@ -53,14 +52,37 @@ impl WordAttractionRank {
     /// Window 10, English stopwords for untagged text.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             window: 10,
         }
     }
 
     /// Stopwords used for untagged text.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -78,10 +100,10 @@ impl WordAttractionRank {
         vectors: &HashMap<String, Vec<f64>>,
         max: usize,
     ) -> Vec<(String, f64)> {
-        let accept = |t: &crate::text::Token| is_graph_word(t, &self.stopwords);
+        let accept = graph_words(self.stopwords.language());
         let mut freq: HashMap<&str, f64> = HashMap::new();
         let mut vec_of: HashMap<&str, &[f64]> = HashMap::new();
-        for t in doc.tokens().filter(|t| accept(t)) {
+        for (t, _) in doc.tokens_in().filter(|&(t, l)| accept(t, l)) {
             *freq.entry(&t.stem).or_insert(0.0) += 1.0;
             if let Some(v) = vectors.get(&t.word.to_lowercase()) {
                 vec_of.entry(&t.stem).or_insert(v);
@@ -99,7 +121,7 @@ impl WordAttractionRank {
             };
             attraction(fa, fb, cooc, if d2 > 0.0 { d2 } else { 1.0 })
         });
-        let candidates = noun_adjective_runs(doc, &self.stopwords);
+        let candidates = noun_adjective_runs(doc, &self.stopwords.delimiting(doc));
         rank_by_word_sum(&candidates, &g.scores(None), max)
     }
 }

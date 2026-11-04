@@ -16,13 +16,13 @@
 
 use super::graph::{similarity_matrix, stationary};
 use super::{by_score, content_stems, SentenceExtractor};
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use std::collections::HashSet;
 
 /// TextRank over sentences.
 #[derive(Debug, Clone)]
 pub struct TextRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     damping: f64,
 }
 
@@ -36,14 +36,22 @@ impl TextRank {
     /// English stopwords, damping 0.85.
     pub fn new() -> Self {
         TextRank {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             damping: 0.85,
         }
     }
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -55,7 +63,7 @@ impl TextRank {
 
     /// The sentence graph's edge weights.
     pub fn similarity(&self, doc: &Document) -> Vec<Vec<f64>> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let sets: Vec<HashSet<&str>> = terms.iter().map(|s| s.iter().copied().collect()).collect();
         similarity_matrix(terms.len(), false, |i, j| {
             let shared = sets[i].intersection(&sets[j]).count() as f64;

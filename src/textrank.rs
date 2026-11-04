@@ -30,15 +30,15 @@
 //! - Phrase ties are broken by first occurrence (pke adds `1e-8 * offset`,
 //!   which favours later candidates).
 
-use crate::graph::{is_graph_word, rank_by_word_sum, WordGraph};
-use crate::text::{longest_sequences, Document};
-use crate::{default_stopwords, KeywordExtractor};
+use crate::graph::{graph_words, rank_by_word_sum, WordGraph};
+use crate::text::{longest_sequences, Document, Roles};
+use crate::KeywordExtractor;
 use std::collections::{HashMap, HashSet};
 
 /// TextRank keyphrase extractor with phrase merging.
 #[derive(Debug, Clone)]
 pub struct TextRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     window: usize,
     top_fraction: f64,
 }
@@ -53,7 +53,7 @@ impl TextRank {
     /// Window 2, top third of the words, English stopwords for untagged text.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             window: 2,
             top_fraction: 1.0 / 3.0,
         }
@@ -61,7 +61,16 @@ impl TextRank {
 
     /// Stopwords used to pick graph words in untagged text.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -86,7 +95,7 @@ impl TextRank {
         let mut g = WordGraph::default();
         g.add_document(
             doc,
-            &|t| is_graph_word(t, &self.stopwords),
+            &graph_words(self.stopwords.language()),
             self.window,
             1.0,
         );
@@ -121,7 +130,7 @@ impl TextRank {
 
 impl KeywordExtractor for TextRank {
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), max_keywords)
+        self.rank(&self.stopwords.document(text), max_keywords)
     }
 }
 
