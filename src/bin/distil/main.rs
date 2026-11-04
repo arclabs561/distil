@@ -63,8 +63,10 @@ struct KeywordsArgs {
     /// Number of keyphrases per input.
     #[arg(short = 'k', long = "top", default_value_t = 10)]
     top: usize,
-    /// Stopword language: en, de, fr, es, pt, it, nl, ru or ar. Stemming
-    /// stays English.
+    /// Stopword language as an ISO 639-1 code (en, de, fr, es, ...; an
+    /// unknown code lists them), or `auto` to detect it from the inputs
+    /// (whatlang; English when detection is unreliable). Stemming stays
+    /// English.
     #[arg(long, default_value = "en")]
     lang: String,
     /// Word-topic distributions for topical-page-rank: one line per word,
@@ -96,8 +98,10 @@ struct SummarizeArgs {
     /// Word budget per input instead of a sentence count.
     #[arg(long)]
     words: Option<usize>,
-    /// Stopword language: en, de, fr, es, pt, it, nl, ru or ar. Stemming
-    /// stays English.
+    /// Stopword language as an ISO 639-1 code (en, de, fr, es, ...; an
+    /// unknown code lists them), or `auto` to detect it from the inputs
+    /// (whatlang; English when detection is unreliable). Stemming stays
+    /// English.
     #[arg(long, default_value = "en")]
     lang: String,
     /// One JSON object per input per line:
@@ -295,25 +299,82 @@ fn print_methods() -> Result<(), Failure> {
     Ok(())
 }
 
-/// Stopwords for `--lang`, or a usage error.
-fn stopwords_for(lang: &str) -> HashSet<String> {
+/// Exits with a usage error unless `--lang` is `auto` or has stopwords.
+fn check_lang(lang: &str) {
+    if lang != "auto" {
+        stopwords_for(lang, &[]);
+    }
+}
+
+/// The ISO 639-1 code of the language whatlang detects in `text`, if the
+/// detection is reliable and NLTK has stopwords for that language.
+fn detect_language(text: &str) -> Option<&'static str> {
+    use whatlang::Lang::*;
+    let info = whatlang::detect(text).filter(whatlang::Info::is_reliable)?;
+    Some(match info.lang() {
+        Ara => "ar",
+        Aze => "az",
+        Bel => "be",
+        Ben => "bn",
+        Cat => "ca",
+        Cmn => "zh",
+        Dan => "da",
+        Deu => "de",
+        Ell => "el",
+        Eng => "en",
+        Fin => "fi",
+        Fra => "fr",
+        Heb => "he",
+        Hun => "hu",
+        Ind => "id",
+        Ita => "it",
+        Nep => "ne",
+        Nld => "nl",
+        Nob => "no",
+        Por => "pt",
+        Ron => "ro",
+        Rus => "ru",
+        Slv => "sl",
+        Spa => "es",
+        Swe => "sv",
+        Tam => "ta",
+        Tur => "tr",
+        Uzb => "uz",
+        _ => return None,
+    })
+}
+
+/// Stopwords for `--lang`, or a usage error. `auto` detects the language of
+/// all `texts` together and falls back to English.
+fn stopwords_for(lang: &str, texts: &[String]) -> HashSet<String> {
+    let lang = if lang == "auto" {
+        detect_language(&texts.join("\n")).unwrap_or_else(|| {
+            eprintln!("distil: no supported language detected; using en stopwords");
+            "en"
+        })
+    } else {
+        lang
+    };
     stopwords::for_language(lang).unwrap_or_else(|| {
         usage_error(
             ErrorKind::InvalidValue,
-            format!("unsupported --lang {lang:?}; use en, de, fr, es, pt, it, nl, ru or ar"),
+            format!(
+                "unsupported --lang {lang:?}; use auto or one of {}",
+                stopwords::languages().join(", ")
+            ),
         )
     })
 }
 
 fn summarize(args: &SummarizeArgs) -> Result<(), Failure> {
-    let stop = stopwords_for(&args.lang);
+    check_lang(&args.lang);
     let budget = match args.words {
         Some(w) => Budget::Words(w),
         None => Budget::Sentences(args.sentences),
     };
     let sources = sources(&args.input);
     let texts = read_all(&sources, args.input.raw)?;
-    let method = args.method.extractor(stop);
+    let method = args.method.extractor(stopwords_for(&args.lang, &texts));
     let mut out = io::stdout().lock();
     for (i, (source, text)) in sources.iter().zip(&texts).enumerate() {
         let doc = Document::from_text(text);
@@ -411,15 +472,7 @@ fn text(args: &InputArgs) -> Result<(), Failure> {
 }
 
 fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
-    let Some(stop) = stopwords::for_language(&args.lang) else {
-        usage_error(
-            ErrorKind::InvalidValue,
-            format!(
-                "unsupported --lang {:?}; use en, de, fr, es, pt, it, nl, ru or ar",
-                args.lang
-            ),
-        );
-    };
+    check_lang(&args.lang);
     let topics = match (&args.topics, args.method) {
         (Some(path), Method::TopicalPageRank) => Some(read_topics(path)?),
         (None, Method::TopicalPageRank) => usage_error(
@@ -445,6 +498,7 @@ fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
         );
     }
     let texts = read_all(&sources, args.input.raw)?;
+    let stop = stopwords_for(&args.lang, &texts);
     let ranked = rank(args.method, &texts, args.top, stop, topics.as_ref());
 
     let mut out = io::stdout().lock();

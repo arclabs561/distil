@@ -25,6 +25,7 @@
 //! Callers who need specific stems pass them through [`Document::from_tokens`].
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 /// Universal part-of-speech tags (Universal Dependencies v2 UPOS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -120,6 +121,154 @@ pub fn stem(word: &str) -> String {
     STEMMER.with(|s| s.stem(&lower).into_owned())
 }
 
+/// Byte ranges of the sentences of `text`, without surrounding whitespace.
+///
+/// Boundaries are the Unicode sentence boundaries of UAX #29 (from
+/// `unicode-segmentation`), so a sentence ends after `.`, `!`, `?` and the
+/// other sentence terminals, including any closing quotes or brackets that
+/// follow them (`2014." Later` splits after the quote), but not before a
+/// lowercase word (`see fig. two`). Two changes adapt UAX #29 to running
+/// text:
+///
+/// - A single line break does not end a sentence; text is often hard
+///   wrapped. A break that UAX #29 places only because of a line break is
+///   kept when the line break is part of a blank line. Otherwise it is kept
+///   only where UAX #29 would also break if the line break were a space.
+/// - A period after a known English abbreviation (`Mr.`, `e.g.`, `U.S.`,
+///   single-letter initials) does not end a sentence, unless the next word
+///   is a common sentence opener such as "The", "We" or "However" (`the
+///   U.S. The` splits, `U.S. Senator` does not). Both word lists and the
+///   rule come from the sentencex segmenter (Wikimedia; MIT License);
+///   abbreviations are matched lowercased, openers case-sensitively.
+pub fn sentence_ranges(text: &str) -> Vec<Range<usize>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, chunk) in text.split_sentence_bound_indices() {
+        let end = i + chunk.len();
+        if end < text.len() && !keep_break(&text[start..end], &text[end..]) {
+            continue;
+        }
+        let body = text[start..end].trim();
+        if !body.is_empty() {
+            let lead = text[start..end].len() - text[start..end].trim_start().len();
+            out.push(start + lead..start + lead + body.len());
+        }
+        start = end;
+    }
+    out
+}
+
+/// Whether a UAX #29 sentence break between `before` and `after` is kept.
+fn keep_break(before: &str, after: &str) -> bool {
+    use unicode_segmentation::UnicodeSegmentation;
+    let body = before.trim_end();
+    let gap = &before[body.len()..];
+    let line_breaks = gap
+        .replace("\r\n", "\n")
+        .chars()
+        .filter(|&c| is_line_break(c))
+        .count();
+    if line_breaks >= 2 {
+        return true;
+    }
+    if line_breaks > 0 {
+        // Would UAX #29 break here if every line break were a space?
+        let flow = |c: char| if is_line_break(c) { ' ' } else { c };
+        let mut tail: Vec<char> = body.chars().rev().take(32).map(flow).collect();
+        tail.reverse();
+        let tail: String = tail.into_iter().collect();
+        let next: String = after.trim_start().chars().take(32).map(flow).collect();
+        let flowed = format!("{tail} {next}");
+        let cut = tail.len() + 1;
+        if !flowed.split_sentence_bound_indices().any(|(i, _)| i == cut) {
+            return false;
+        }
+    }
+    !ends_with_abbreviation(body) || starts_sentence(after)
+}
+
+/// Reads one of the vendored word lists: a word per line, `#` comments.
+fn word_list(list: &'static str) -> impl Iterator<Item = &'static str> {
+    list.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+}
+
+/// True when the first word of `after` is a sentence starter such as "The",
+/// "We" or "However" (case-sensitive).
+fn starts_sentence(after: &str) -> bool {
+    thread_local! {
+        static STARTERS: HashSet<&'static str> =
+            word_list(include_str!("sentence_starters_en.txt")).collect();
+    }
+    let after = after.trim_start();
+    let end = after
+        .find(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '!' | '?'))
+        .unwrap_or(after.len());
+    end > 0 && STARTERS.with(|s| s.contains(&after[..end]))
+}
+
+/// UAX #29's paragraph separators (classes CR, LF and Sep).
+fn is_line_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')
+}
+
+/// True when `body` ends with a period directly after a known abbreviation.
+fn ends_with_abbreviation(body: &str) -> bool {
+    thread_local! {
+        static ABBREVIATIONS: HashSet<String> = word_list(include_str!("abbreviations_en.txt"))
+            .map(str::to_lowercase)
+            .collect();
+    }
+    let Some(head) = body.strip_suffix('.') else {
+        return false;
+    };
+    // The last whitespace-separated word, without opening quotes or brackets.
+    let word = head
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or("")
+        .trim_start_matches(|c: char| !c.is_alphanumeric());
+    !word.is_empty()
+        && word.chars().all(|c| c.is_alphanumeric() || c == '.')
+        && ABBREVIATIONS.with(|a| a.contains(&word.to_lowercase()))
+}
+
+/// Byte ranges of the tokens of `text`, skipping whitespace.
+///
+/// Tokens are the Unicode word boundaries of UAX #29 (from
+/// `unicode-segmentation`): "don't", "3.5", "v3.5", "e.g" and "U.S" are
+/// single words, and every punctuation character is its own token. One
+/// change: words joined by a single `-` with no space around it stay one
+/// token ("state-of-the-art"), where UAX #29 would split at each hyphen.
+pub fn word_ranges(text: &str) -> Vec<Range<usize>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let is_word = |r: &Range<usize>| text[r.clone()].chars().any(char::is_alphanumeric);
+    let mut out: Vec<Range<usize>> = Vec::new();
+    for (i, segment) in text.split_word_bound_indices() {
+        if segment.chars().all(char::is_whitespace) {
+            continue;
+        }
+        let range = i..i + segment.len();
+        if let [.., left, hyphen] = out.as_slice() {
+            let joined = is_word(&range)
+                && &text[hyphen.clone()] == "-"
+                && hyphen.end == range.start
+                && left.end == hyphen.start
+                && is_word(left);
+            if joined {
+                let start = left.start;
+                out.truncate(out.len() - 2);
+                out.push(start..range.end);
+                continue;
+            }
+        }
+        out.push(range);
+    }
+    out
+}
+
 /// A tokenized document: sentences of tokens.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Document {
@@ -131,68 +280,24 @@ pub struct Document {
 impl Document {
     /// Tokenize, split into sentences and stem untagged text.
     ///
-    /// Words are runs of alphanumeric characters, joined across a single
-    /// inner `-`, `'` or `.` (so "state-of-the-art", "don't" and "3.5" stay
-    /// whole); every other non-space character is its own token. A sentence
-    /// ends at `.`, `!` or `?` followed by whitespace and an uppercase letter
-    /// or digit, or by the end of the text. [`Document::sentence_spans`]
-    /// gives each sentence's byte range in `text`.
+    /// Sentences follow [`sentence_ranges`]; words follow [`word_ranges`].
+    /// [`Document::sentence_spans`] gives each sentence's byte range in
+    /// `text`, from its first token to its last non-space character.
     pub fn from_text(text: &str) -> Document {
-        let chars: Vec<char> = text.chars().collect();
-        let bytes: Vec<usize> = text
-            .char_indices()
-            .map(|(b, _)| b)
-            .chain(std::iter::once(text.len()))
-            .collect();
         let mut sentences = Vec::new();
         let mut spans = Vec::new();
-        let mut current: Vec<Token> = Vec::new();
-        let mut start = 0;
-        let mut i = 0;
-        while i < chars.len() {
-            let c = chars[i];
-            if c.is_whitespace() {
-                i += 1;
+        for range in sentence_ranges(text) {
+            let words = word_ranges(&text[range.clone()]);
+            let Some(first) = words.first() else {
                 continue;
-            }
-            if current.is_empty() {
-                start = bytes[i];
-            }
-            if c.is_alphanumeric() {
-                let first = i;
-                while i < chars.len() {
-                    let joiner = matches!(chars[i], '-' | '\'' | '.' | '\u{2019}')
-                        && i + 1 < chars.len()
-                        && chars[i + 1].is_alphanumeric()
-                        && (chars[i] != '.' || chars[i - 1].is_ascii_digit());
-                    if !(chars[i].is_alphanumeric() || joiner) {
-                        break;
-                    }
-                    i += 1;
-                }
-                let word: String = chars[first..i].iter().collect();
-                current.push(Token::new(&word, None));
-                continue;
-            }
-            current.push(Token::new(&c.to_string(), None));
-            i += 1;
-            if matches!(c, '.' | '!' | '?') {
-                let mut j = i;
-                while j < chars.len() && chars[j].is_whitespace() {
-                    j += 1;
-                }
-                let at_end = j == chars.len();
-                let next_starts =
-                    !at_end && j > i && (chars[j].is_uppercase() || chars[j].is_numeric());
-                if at_end || next_starts {
-                    sentences.push(std::mem::take(&mut current));
-                    spans.push(start..bytes[i]);
-                }
-            }
-        }
-        if !current.is_empty() {
-            sentences.push(current);
-            spans.push(start..text.trim_end().len());
+            };
+            spans.push(range.start + first.start..range.end);
+            sentences.push(
+                words
+                    .into_iter()
+                    .map(|w| Token::new(&text[range.start + w.start..range.start + w.end], None))
+                    .collect(),
+            );
         }
         Document { sentences, spans }
     }
@@ -496,8 +601,103 @@ mod tests {
     }
 
     #[test]
+    fn words_follow_uax29_but_keep_hyphenated_compounds() {
+        let text = "U.S. e.g. don\u{2019}t x86_64 non-linear -- a - b C++";
+        let got: Vec<&str> = word_ranges(text).into_iter().map(|r| &text[r]).collect();
+        assert_eq!(
+            got,
+            vec![
+                "U.S",
+                ".",
+                "e.g",
+                ".",
+                "don\u{2019}t",
+                "x86_64",
+                "non-linear",
+                "-",
+                "-",
+                "a",
+                "-",
+                "b",
+                "C",
+                "+",
+                "+"
+            ]
+        );
+    }
+
+    #[test]
     fn sentence_needs_uppercase_after_period() {
         let doc = Document::from_text("see fig. two. Then more.");
+        assert_eq!(doc.sentences().len(), 2);
+    }
+
+    #[test]
+    fn sentence_ends_after_closing_quote() {
+        let text = "He left in 2014.\" Later he (aged 40.) returned! Why? Yes.";
+        let got: Vec<&str> = sentence_ranges(text)
+            .into_iter()
+            .map(|r| &text[r])
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "He left in 2014.\"",
+                "Later he (aged 40.) returned!",
+                "Why?",
+                "Yes."
+            ]
+        );
+    }
+
+    #[test]
+    fn abbreviations_do_not_end_sentences() {
+        let text = "Mr. Smith met Dr. J. Doe in the U.S. on Jan. 5. He hasn't. U.S. Senator \
+                    Lee told me. We left the U.S. The end.";
+        let got: Vec<&str> = sentence_ranges(text)
+            .into_iter()
+            .map(|r| &text[r])
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "Mr. Smith met Dr. J. Doe in the U.S. on Jan. 5.",
+                "He hasn't.",
+                "U.S. Senator Lee told me.",
+                "We left the U.S.",
+                "The end."
+            ]
+        );
+    }
+
+    #[test]
+    fn single_line_breaks_join_and_blank_lines_split() {
+        let text = "A hard\nwrapped sentence.\nNext one\r\n\r\nHeading\n\nBody text.";
+        let got: Vec<&str> = sentence_ranges(text)
+            .into_iter()
+            .map(|r| &text[r])
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "A hard\nwrapped sentence.",
+                "Next one",
+                "Heading",
+                "Body text."
+            ]
+        );
+    }
+
+    #[test]
+    fn spans_index_the_source_text() {
+        let text = "  \u{201C}Caf\u{e9} au lait.\u{201D} Next.  ";
+        let doc = Document::from_text(text);
+        let got: Vec<&str> = doc
+            .sentence_spans()
+            .iter()
+            .map(|r| &text[r.clone()])
+            .collect();
+        assert_eq!(got, vec!["\u{201C}Caf\u{e9} au lait.\u{201D}", "Next."]);
         assert_eq!(doc.sentences().len(), 2);
     }
 

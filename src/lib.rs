@@ -64,10 +64,13 @@
 //!
 //! # Languages
 //!
-//! Tokenization splits on whitespace and punctuation, and English stopwords
-//! are the default. [`stopwords::for_language`] has lists for German, French,
-//! Spanish, Portuguese, Italian, Dutch, Russian and Arabic. Pre-tokenize CJK
-//! or Thai text and pass space-separated tokens.
+//! Sentences and words follow the Unicode text segmentation rules (UAX #29;
+//! see [`text::sentence_ranges`]), and English stopwords are the default.
+//! [`stopwords::for_language`] has NLTK's lists for German, French, Spanish,
+//! Portuguese, Italian, Dutch, Russian, Arabic and 24 more
+//! ([`stopwords::languages`]). UAX #29 has no dictionary, so it splits
+//! Chinese, Japanese (except katakana) and Thai into single characters;
+//! pre-tokenize such text and pass space-separated tokens.
 
 pub mod collabrank;
 pub mod communitycluster;
@@ -106,7 +109,7 @@ pub use rake_extractor::RakeExtractor;
 pub use sgrank::SgRank;
 pub use singlerank::SingleRank;
 #[doc(inline)]
-pub use stopwords::{default_stopwords, STOPWORDS};
+pub use stopwords::default_stopwords;
 pub use summarize::{Budget, SentenceExtractor};
 pub use textrank::TextRank;
 pub use tfidf::{DocumentFrequency, TfIdf};

@@ -1,364 +1,106 @@
-//! Stopword lists for various languages.
+//! Stopword lists.
 //!
-//! These are minimal lists covering common function words. For production use
-//! with non-English text, consider more comprehensive sources.
+//! The lists are NLTK's stopword corpus (`nltk_data/corpora/stopwords`), as
+//! packaged by the `stop-words` crate with its `nltk` feature. Every
+//! language uses the NLTK list rather than the larger stopwords-iso list
+//! because NLTK's lists hold function words only. stopwords-iso merges
+//! several sources; its English list has 1,298 words, including content
+//! words such as "information", "system", "web" and "computer". On the
+//! Inspec test set, 482 of the 3,283 gold keyphrases (counted per abstract)
+//! contain one of its words and so can never be a stopword-delimited
+//! candidate (NLTK's list: 68), even though it raises F1@10 for most
+//! untagged methods by removing generic words from candidates. If another
+//! crate in the build enables `stop-words`' `iso` feature, the NLTK list
+//! still wins for every language NLTK covers.
+//!
+//! English, the default, has 198 words. It lacks a few modals and
+//! contractions that other lists have ("could", "would", "that's"), so
+//! those words can appear inside phrases from untagged text.
+//!
+//! The reference tools each ship their own English list: pke uses spaCy's
+//! (326 words), sumy its own (580 words), and YAKE its own. For parity with
+//! one of them, pass its list through a method's `with_stopwords`, as the
+//! parity tests do.
 
 use std::collections::HashSet;
 
-/// Default English stopwords for keyword extraction.
-pub const STOPWORDS: &[&str] = &[
-    "a",
-    "about",
-    "above",
-    "after",
-    "again",
-    "against",
-    "all",
-    "am",
-    "an",
-    "and",
-    "any",
-    "are",
-    "aren't",
-    "as",
-    "at",
-    "be",
-    "because",
-    "been",
-    "before",
-    "being",
-    "below",
-    "between",
-    "both",
-    "but",
-    "by",
-    "can't",
-    "cannot",
-    "could",
-    "couldn't",
-    "did",
-    "didn't",
-    "do",
-    "does",
-    "doesn't",
-    "doing",
-    "don't",
-    "down",
-    "during",
-    "each",
-    "few",
-    "for",
-    "from",
-    "further",
-    "had",
-    "hadn't",
-    "has",
-    "hasn't",
-    "have",
-    "haven't",
-    "having",
-    "he",
-    "he'd",
-    "he'll",
-    "he's",
-    "her",
-    "here",
-    "here's",
-    "hers",
-    "herself",
-    "him",
-    "himself",
-    "his",
-    "how",
-    "how's",
-    "i",
-    "i'd",
-    "i'll",
-    "i'm",
-    "i've",
-    "if",
-    "in",
-    "into",
-    "is",
-    "isn't",
-    "it",
-    "it's",
-    "its",
-    "itself",
-    "let's",
-    "me",
-    "more",
-    "most",
-    "mustn't",
-    "my",
-    "myself",
-    "no",
-    "nor",
-    "not",
-    "of",
-    "off",
-    "on",
-    "once",
-    "only",
-    "or",
-    "other",
-    "ought",
-    "our",
-    "ours",
-    "ourselves",
-    "out",
-    "over",
-    "own",
-    "same",
-    "shan't",
-    "she",
-    "she'd",
-    "she'll",
-    "she's",
-    "should",
-    "shouldn't",
-    "so",
-    "some",
-    "such",
-    "than",
-    "that",
-    "that's",
-    "the",
-    "their",
-    "theirs",
-    "them",
-    "themselves",
-    "then",
-    "there",
-    "there's",
-    "these",
-    "they",
-    "they'd",
-    "they'll",
-    "they're",
-    "they've",
-    "this",
-    "those",
-    "through",
-    "to",
-    "too",
-    "under",
-    "until",
-    "up",
-    "very",
-    "was",
-    "wasn't",
-    "we",
-    "we'd",
-    "we'll",
-    "we're",
-    "we've",
-    "were",
-    "weren't",
-    "what",
-    "what's",
-    "when",
-    "when's",
-    "where",
-    "where's",
-    "which",
-    "while",
-    "who",
-    "who's",
-    "whom",
-    "why",
-    "why's",
-    "with",
-    "won't",
-    "would",
-    "wouldn't",
-    "you",
-    "you'd",
-    "you'll",
-    "you're",
-    "you've",
-    "your",
-    "yours",
-    "yourself",
-    "yourselves",
-];
-
-/// Create a stopword set from the default English list.
-///
-/// For other languages, use [`for_language`] or construct your own set.
+/// NLTK's English stopwords, the default for every method.
 pub fn default_stopwords() -> HashSet<String> {
-    STOPWORDS.iter().map(|s| s.to_string()).collect()
+    for_language("en").unwrap_or_default()
 }
 
-/// German stopwords (common function words).
-pub fn german() -> HashSet<String> {
-    [
-        "der", "die", "das", "und", "in", "zu", "den", "ist", "nicht", "von", "sie", "mit", "auf",
-        "es", "ein", "eine", "dem", "für", "sich", "an", "als", "auch", "er", "hat", "aus", "bei",
-        "war", "so", "werden", "ich", "ihr", "wir", "aber", "wie", "nur", "oder", "nach", "noch",
-        "kann", "über",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// French stopwords.
-pub fn french() -> HashSet<String> {
-    [
-        "le", "la", "les", "de", "du", "des", "un", "une", "et", "en", "à", "au", "aux", "que",
-        "qui", "ne", "pas", "pour", "sur", "ce", "cette", "il", "elle", "nous", "vous", "ils",
-        "elles", "son", "sa", "ses", "leur", "leurs", "mais", "ou", "donc", "car", "avec", "dans",
-        "par",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Spanish stopwords.
-pub fn spanish() -> HashSet<String> {
-    [
-        "el", "la", "los", "las", "de", "del", "en", "y", "a", "que", "es", "un", "una", "por",
-        "con", "no", "para", "se", "su", "al", "lo", "como", "más", "pero", "sus", "le", "ya", "o",
-        "este", "si", "porque", "esta", "entre", "cuando", "muy", "sin", "sobre", "también", "me",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Portuguese stopwords.
-pub fn portuguese() -> HashSet<String> {
-    [
-        "o", "a", "os", "as", "de", "da", "do", "das", "dos", "em", "um", "uma", "e", "é", "que",
-        "no", "na", "nos", "nas", "por", "para", "com", "não", "se", "mais", "como", "mas", "ao",
-        "ele", "ela", "seu", "sua", "ou", "ser", "quando", "muito", "há", "foi", "são",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Italian stopwords.
-pub fn italian() -> HashSet<String> {
-    [
-        "il", "lo", "la", "i", "gli", "le", "di", "a", "da", "in", "con", "su", "per", "tra",
-        "fra", "un", "uno", "una", "e", "che", "non", "è", "si", "come", "più", "ma", "o", "anche",
-        "questo", "quello", "essere", "sono", "sono", "suo", "sua", "loro", "chi", "cui", "dove",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Dutch stopwords.
-pub fn dutch() -> HashSet<String> {
-    [
-        "de", "het", "een", "van", "en", "in", "is", "op", "te", "dat", "die", "voor", "zijn",
-        "met", "niet", "aan", "om", "ook", "als", "dan", "maar", "of", "door", "over", "bij",
-        "uit", "naar", "nog", "wel", "kan", "meer", "was", "worden", "tot", "er", "al", "worden",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Russian stopwords (Cyrillic).
-pub fn russian() -> HashSet<String> {
-    [
-        "и",
-        "в",
-        "не",
-        "на",
-        "я",
-        "с",
-        "он",
-        "что",
-        "это",
-        "по",
-        "но",
-        "они",
-        "к",
-        "у",
-        "же",
-        "вы",
-        "за",
-        "бы",
-        "так",
-        "от",
-        "все",
-        "как",
-        "она",
-        "его",
-        "только",
-        "или",
-        "мы",
-        "ещё",
-        "из",
-        "для",
-        "если",
-        "уже",
-        "при",
-        "их",
-        "во",
-        "когда",
-        "до",
-        "ни",
-        "чтобы",
-        "да",
-        "был",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Arabic stopwords.
-pub fn arabic() -> HashSet<String> {
-    [
-        "في", "من", "على", "إلى", "عن", "مع", "هذا", "هذه", "التي", "الذي", "أن", "كان", "قد",
-        "ما", "لم", "لا", "و", "أو", "ثم", "بين", "كل", "بعد", "قبل", "حتى", "إذا", "هو", "هي",
-        "هم", "أنت", "نحن",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// Get stopwords for a language by ISO 639-1 code.
+/// Stopwords for a language, from an ISO 639-1 code such as `"de"`.
 ///
-/// Returns `None` if the language is not supported.
+/// English, German, French, Spanish, Portuguese, Italian, Dutch, Russian and
+/// Arabic also accept their ISO 639-2 code (`"deu"`) or English name
+/// (`"german"`). [`languages`] lists every supported code. Returns `None`
+/// for other languages.
 pub fn for_language(lang: &str) -> Option<HashSet<String>> {
-    match lang.to_lowercase().as_str() {
-        "en" | "eng" | "english" => Some(default_stopwords()),
-        "de" | "deu" | "german" => Some(german()),
-        "fr" | "fra" | "french" => Some(french()),
-        "es" | "spa" | "spanish" => Some(spanish()),
-        "pt" | "por" | "portuguese" => Some(portuguese()),
-        "it" | "ita" | "italian" => Some(italian()),
-        "nl" | "nld" | "dutch" => Some(dutch()),
-        "ru" | "rus" | "russian" => Some(russian()),
-        "ar" | "ara" | "arabic" => Some(arabic()),
-        _ => None,
+    let lang = lang.to_lowercase();
+    let code = match lang.as_str() {
+        "eng" | "english" => "en",
+        "deu" | "german" => "de",
+        "fra" | "french" => "fr",
+        "spa" | "spanish" => "es",
+        "por" | "portuguese" => "pt",
+        "ita" | "italian" => "it",
+        "nld" | "dutch" => "nl",
+        "rus" | "russian" => "ru",
+        "ara" | "arabic" => "ar",
+        other => other,
+    };
+    if !NLTK_LANGUAGES.contains(&code) {
+        return None;
     }
+    Some(
+        stop_words::get(code)
+            .iter()
+            .map(|w| w.to_string())
+            .collect(),
+    )
 }
+
+/// The language codes [`for_language`] accepts, sorted.
+pub fn languages() -> &'static [&'static str] {
+    NLTK_LANGUAGES
+}
+
+/// The codes of `stop-words`' NLTK lists. `stop-words` 0.10.0 has no lookup
+/// that returns `None` for an unknown code (its `get` panics), so the codes
+/// are listed here.
+const NLTK_LANGUAGES: &[&str] = &[
+    "ar", "az", "be", "bn", "ca", "da", "de", "el", "en", "es", "eu", "fi", "fr", "he", "hinglish",
+    "hu", "id", "it", "kk", "ne", "nl", "no", "pt", "ro", "ru", "sl", "sq", "sv", "ta", "tg", "tr",
+    "uz", "zh",
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_stopwords_for_language() {
-        assert!(for_language("en").is_some());
-        assert!(for_language("de").is_some());
-        assert!(for_language("fr").is_some());
-        assert!(for_language("es").is_some());
-        assert!(for_language("pt").is_some());
-        assert!(for_language("it").is_some());
-        assert!(for_language("nl").is_some());
-        assert!(for_language("ru").is_some());
-        assert!(for_language("ar").is_some());
+    fn languages_and_aliases() {
+        for lang in ["en", "de", "fr", "es", "pt", "it", "nl", "ru", "ar"] {
+            assert!(for_language(lang).is_some(), "{lang}");
+        }
+        assert_eq!(for_language("German"), for_language("de"));
+        assert_eq!(for_language("eng"), Some(default_stopwords()));
         assert!(for_language("xx").is_none());
+        assert!(languages().contains(&"sv"));
+        assert_eq!(languages().len(), 33);
+        assert!(languages().windows(2).all(|w| w[0] < w[1]));
+        for lang in languages() {
+            assert!(!stop_words::get(lang).is_empty(), "{lang}");
+        }
+    }
+
+    #[test]
+    fn english_is_nltk() {
+        let en = default_stopwords();
+        assert_eq!(en.len(), 198);
+        for w in ["the", "of", "and", "don't", "should've"] {
+            assert!(en.contains(w), "{w}");
+        }
+        assert!(!en.contains("would"));
     }
 }

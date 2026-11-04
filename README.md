@@ -49,23 +49,23 @@ stemmed exact match against the keyphrases that occur in the abstract.
 
 | Method | Family | Extra input | Checked against | F1@10 |
 |---|---|---|---|---|
-| `PositionRank` | graph | | pke | 0.258 |
-| `ExpandRank` | graph | neighbour documents | identities with SingleRank | 0.246 |
-| `CollabRank` | graph | a document cluster | identities with ExpandRank | 0.243 |
+| `PositionRank` | graph | | pke | 0.263 |
+| `ExpandRank` | graph | neighbour documents | identities with SingleRank | 0.255 |
+| `CollabRank` | graph | a document cluster | identities with ExpandRank | 0.250 |
+| `SingleRank` | graph | | pke | 0.248 |
 | `TopicalPageRank` | graph | topic distributions | pke | 0.242 |
-| `SingleRank` | graph | | pke | 0.239 |
-| `SgRank` | graph over candidates | document frequencies (optional) | paper equations | 0.236 |
-| `RakeExtractor` | statistical | | unit tests | 0.228 |
-| `MultipartiteRank` | graph over topics | | pke | 0.225 |
-| `TopicRank` | graph over topics | | pke | 0.220 |
+| `SgRank` | graph over candidates | document frequencies (optional) | paper equations | 0.242 |
+| `RakeExtractor` | statistical | | unit tests | 0.239 |
+| `MultipartiteRank` | graph over topics | | pke | 0.227 |
+| `TopicRank` | graph over topics | | pke | 0.219 |
 | `FirstPhrases` | baseline | | pke | 0.218 |
-| `KeyCluster` | clustering | relatedness (optional) | paper equations | 0.192 |
-| `KpMiner` | statistical | document frequencies | pke | 0.182 |
-| `Yake` | statistical | | `yake` package | 0.172 |
-| `TomokiyoHurst` | language model | background corpus | paper equations | 0.169 |
-| `TfIdf` | statistical | document frequencies | pke | 0.160 |
-| `CommunityCluster` | clustering | relatedness (optional) | paper equations | 0.152 |
-| `TextRank` | graph | | pke | 0.135 |
+| `KeyCluster` | clustering | relatedness (optional) | paper equations | 0.199 |
+| `KpMiner` | statistical | document frequencies | pke | 0.183 |
+| `TomokiyoHurst` | language model | background corpus | paper equations | 0.175 |
+| `Yake` | statistical | | `yake` package | 0.174 |
+| `TfIdf` | statistical | document frequencies | pke | 0.161 |
+| `CommunityCluster` | clustering | relatedness (optional) | paper equations | 0.158 |
+| `TextRank` | graph | | pke | 0.138 |
 | `EmbedRank` | embedding | phrase and document vectors | paper equations | |
 | `WordAttractionRank` | graph | word vectors | paper equations | |
 
@@ -84,7 +84,7 @@ plain text it uses phrases between stopwords and punctuation.
 ## Command line
 
 The `distil` binary is behind the `cli` feature and needs Rust 1.91 or
-newer (the library builds with 1.80).
+newer (the library builds with 1.85).
 
 ```sh
 cargo install distil --features cli
@@ -111,16 +111,17 @@ distil keywords -k 5 https://en.wikipedia.org/wiki/PageRank
 ```
 
 ```text
-0.0889	visited page's pagerank
-0.0884	page's pagerank
-0.0842	google directory pagerank
-0.0833	google pagerank
-0.0759	using personalized pagerank
+0.0907	visited page's pagerank
+0.0902	page's pagerank
+0.0858	google directory pagerank
+0.0849	google pagerank
+0.0773	using personalized pagerank
 ```
 
 - `distil keywords`: `-m/--method` (default `position-rank`; `distil
   methods` lists the 14 available), `-k/--top`, `--lang` for the stopword
-  list, `--json` for one JSON object per input per line. With several
+  list (an ISO 639-1 code, or `auto` to detect it with whatlang), `--json`
+  for one JSON object per input per line. With several
   inputs, `expand-rank` uses the others as neighbours, `collab-rank` ranks
   them as one cluster, and `tf-idf` and `kp-miner` take document
   frequencies from them; `topical-page-rank` needs `--topics <FILE>`.
@@ -134,11 +135,14 @@ errors.
 
 ## Languages
 
-Tokenization splits on whitespace and punctuation, with English stopwords
-by default. `stopwords::for_language` has lists for German, French,
-Spanish, Portuguese, Italian, Dutch, Russian and Arabic, and every method
-takes them through `with_stopwords`. Pre-tokenize CJK or Thai text and pass
-space-separated tokens.
+Sentences and words follow the Unicode text segmentation rules (UAX #29),
+with an English abbreviation list for sentence ends, and English stopwords
+by default. `stopwords::for_language` has NLTK's stopword lists for German,
+French, Spanish, Portuguese, Italian, Dutch, Russian, Arabic and 24 more
+(`stopwords::languages`), and every method takes them through
+`with_stopwords`.
+UAX #29 splits Chinese, Japanese and Thai into single characters, so
+pre-tokenize such text and pass space-separated tokens.
 
 ## License
 
