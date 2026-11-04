@@ -25,6 +25,16 @@ fn run(ranking: &str, case: &fixture::Case) -> Vec<(String, f64)> {
     }
 }
 
+/// The fixture comes from yake's own English list (SMART plus
+/// "dr", "dra", "mr", "ms"), not distil's default; a swapped list fails here.
+#[test]
+fn reference_list_is_yakes() {
+    assert_eq!(fixture::STOPLIST_LEN, 574);
+    for case in fixture::CASES {
+        assert!(!case.stopwords.is_empty(), "{}", case.name);
+    }
+}
+
 #[test]
 fn yake_matches_the_package() {
     let mut failures = Vec::new();

@@ -81,6 +81,10 @@ def main(out_path):
         "    pub rankings: &'static [(&'static str, &'static [(&'static str, f64)])],",
         "}",
         "",
+        "/// Size of yake's English stopword list; each case keeps only the",
+        "/// list's words that occur in its text.",
+        f"pub const STOPLIST_LEN: usize = {len(stoplist)};",
+        "",
         "pub const CASES: &[Case] = &[",
     ]
     for name, sentences, stopwords, rankings in cases:
