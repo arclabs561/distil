@@ -34,8 +34,29 @@
 //! | [`MultipartiteRank`] | candidates, k-partite by topic | | candidate score |
 //! | [`TopicalPageRank`] | words, biased by topic similarity | word-topic and document-topic distributions | sum of word scores |
 //!
+//! | [`SgRank`] | candidates, distance-weighted | document frequencies (optional) | PageRank of candidate |
+//! | [`WordAttractionRank`] | words, attraction-weighted | word vectors | sum of word scores |
+//!
 //! All but [`TopicalPageRank`] implement [`KeywordExtractor`] (ExpandRank
 //! and CollabRank with no neighbours or cluster).
+//!
+//! # Statistical, clustering and embedding keyphrase methods
+//!
+//! | Method | Candidates | Extra input | Phrase score |
+//! |--------|------------|-------------|--------------|
+//! | [`TfIdf`] | filtered 1-3-grams | [`DocumentFrequency`] | `tf * log2((1 + D) / (1 + df))` |
+//! | [`KpMiner`] | filtered 1-5-grams, frequency and position cut | [`DocumentFrequency`] | tf-idf, compound phrases boosted |
+//! | [`Yake`] | 1-3-grams within punctuation blocks | | YAKE `S(kw)`, lower is better |
+//! | [`FirstPhrases`] | noun/adjective runs | | minus first position |
+//! | [`KeyCluster`] | noun phrases with an exemplar term | relatedness (optional) | exemplar count |
+//! | [`CommunityCluster`] | noun phrases | relatedness, keyphraseness (optional) | community density x informativeness |
+//! | [`EmbedRank`] | noun phrases | phrase and document vectors | cosine to document, or MMR |
+//! | [`TomokiyoHurst`] | 1-3-grams | background word counts | phraseness + informativeness |
+//!
+//! [`TfIdf`], [`KpMiner`], [`Yake`] and [`FirstPhrases`] match pke and the
+//! `yake` package on shared tokens (`tests/pke_parity.rs`,
+//! `tests/yake_parity.rs`); the others have no maintained reference
+//! implementation and are tested against their equations on small inputs.
 //!
 //! # Language Limitations
 //!
@@ -67,34 +88,54 @@
 //! - Mihalcea & Tarau (2004): TextRank
 
 pub mod collabrank;
+pub mod communitycluster;
+pub mod embedrank;
 pub mod expandrank;
+pub mod firstphrases;
 mod graph;
+pub mod keycluster;
+pub mod kpminer;
 pub mod multipartiterank;
 pub mod positionrank;
 mod rake_extractor;
+pub mod sgrank;
 pub mod singlerank;
 pub mod stopwords;
 pub mod text;
 pub mod textrank;
 mod textrank_extractor;
+pub mod tfidf;
 mod tfidf_extractor;
+pub mod tomokiyohurst;
 pub mod topicalpagerank;
 pub mod topicrank;
+pub mod wordattractionrank;
+pub mod yake;
 mod yake_extractor;
 
 pub use collabrank::CollabRank;
+pub use communitycluster::CommunityCluster;
+pub use embedrank::EmbedRank;
 pub use expandrank::ExpandRank;
+pub use firstphrases::FirstPhrases;
+pub use keycluster::KeyCluster;
+pub use kpminer::KpMiner;
 pub use multipartiterank::MultipartiteRank;
 pub use positionrank::PositionRank;
 pub use rake_extractor::RakeExtractor;
+pub use sgrank::SgRank;
 pub use singlerank::SingleRank;
 #[doc(inline)]
 pub use stopwords::{default_stopwords, STOPWORDS};
 pub use textrank::TextRank;
 pub use textrank_extractor::TextRankExtractor;
+pub use tfidf::{DocumentFrequency, TfIdf};
 pub use tfidf_extractor::TfIdfExtractor;
+pub use tomokiyohurst::TomokiyoHurst;
 pub use topicalpagerank::TopicalPageRank;
 pub use topicrank::TopicRank;
+pub use wordattractionrank::WordAttractionRank;
+pub use yake::Yake;
 pub use yake_extractor::YakeExtractor;
 
 // Compile and run the README's Rust examples as doctests.
