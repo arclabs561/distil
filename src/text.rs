@@ -167,7 +167,8 @@ impl Document {
                     j += 1;
                 }
                 let at_end = j == chars.len();
-                let next_starts = j > i && (chars[j].is_uppercase() || chars[j].is_numeric());
+                let next_starts =
+                    !at_end && j > i && (chars[j].is_uppercase() || chars[j].is_numeric());
                 if at_end || next_starts {
                     sentences.push(std::mem::take(&mut current));
                 }
@@ -446,6 +447,12 @@ mod tests {
     fn sentence_needs_uppercase_after_period() {
         let doc = Document::from_text("see fig. two. Then more.");
         assert_eq!(doc.sentences().len(), 2);
+    }
+
+    #[test]
+    fn trailing_whitespace_after_final_period() {
+        let doc = Document::from_text("One sentence.\n");
+        assert_eq!(words(&doc), vec![vec!["One", "sentence", "."]]);
     }
 
     #[test]
