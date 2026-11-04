@@ -1,7 +1,8 @@
 //! Word graphs and PageRank shared by the graph keyphrase methods.
 
-use crate::text::{is_content, Candidate, Document, Token};
-use std::collections::{HashMap, HashSet};
+use crate::text::{is_content_in, Candidate, Document, Stoplist, Token};
+use crate::Language;
+use std::collections::HashMap;
 
 /// PageRank damping factor used by every method in this crate, as in all of
 /// their papers.
@@ -13,13 +14,27 @@ pub(crate) const DAMPING: f64 = 0.85;
 const TOLERANCE: f64 = 1e-10;
 const MAX_ITERATIONS: usize = 1000;
 
+/// A token's sentence language, if its document has one.
+pub(crate) type Accept<'a> = dyn Fn(&Token, Option<&Language>) -> bool + 'a;
+
 /// Graph-node filter: nouns, proper nouns and adjectives for tagged tokens,
 /// non-stopword non-punctuation tokens otherwise.
-pub(crate) fn is_graph_word(token: &Token, stopwords: &HashSet<String>) -> bool {
+pub(crate) fn is_graph_word<S: Stoplist + ?Sized>(
+    token: &Token,
+    stopwords: &S,
+    language: Option<&Language>,
+) -> bool {
     match token.pos {
         Some(p) => p.is_noun_or_adjective(),
-        None => is_content(token, stopwords),
+        None => is_content_in(token, stopwords, language),
     }
+}
+
+/// [`is_graph_word`] as a filter for [`WordGraph::add_document`].
+pub(crate) fn graph_words<S: Stoplist + ?Sized>(
+    stopwords: &S,
+) -> impl Fn(&Token, Option<&Language>) -> bool + '_ {
+    move |t, l| is_graph_word(t, stopwords, l)
 }
 
 /// An undirected weighted graph over stems, nodes in order of first
@@ -48,14 +63,14 @@ impl WordGraph {
     pub fn add_document(
         &mut self,
         doc: &Document,
-        accept: &dyn Fn(&Token) -> bool,
+        accept: &Accept<'_>,
         window: usize,
         weight: f64,
     ) {
         let tokens: Vec<(usize, Option<usize>)> = doc
-            .tokens()
+            .tokens_in()
             .enumerate()
-            .map(|(i, t)| (i, accept(t).then(|| self.node(&t.stem))))
+            .map(|(i, (t, l))| (i, accept(t, l).then(|| self.node(&t.stem))))
             .collect();
         let accepted: Vec<(usize, usize)> = tokens
             .iter()
@@ -235,7 +250,7 @@ mod tests {
         // "graph" and "model" are 2 tokens apart: linked at window 3, not 2.
         let doc = Document::from_text("graph of model");
         let stop = crate::default_stopwords();
-        let accept = |t: &Token| is_graph_word(t, &stop);
+        let accept = graph_words(&stop);
         let mut g = WordGraph::default();
         g.add_document(&doc, &accept, 2, 1.0);
         assert!(g.edges.is_empty());

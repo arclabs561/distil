@@ -302,6 +302,71 @@ fn lang_auto_detects_the_stopword_language() {
 }
 
 #[test]
+fn lang_sets_the_stemmer_and_auto_sentence_mixes_languages() {
+    // The German stemmer merges "Graphen" into "Graph" (one candidate), and
+    // German stopwords delimit the phrases.
+    let german = "Ein Graph hat Knoten. Die Graphen haben viele Knoten und Kanten. \
+        Die Knoten des Graphen sind verbunden.";
+    let o = distil(
+        &["keywords", "-m", "position-rank", "--lang", "de"],
+        Some(german),
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let phrases: Vec<String> = rows(&stdout(&o)).into_iter().map(|(_, p)| p).collect();
+    assert!(phrases.contains(&"graph".to_string()), "{phrases:?}");
+    assert!(
+        !phrases.iter().any(|p| p.contains("graphen")),
+        "{phrases:?}"
+    );
+    for p in &phrases {
+        for stop in ["die", "ein", "des", "und", "sind", "hat"] {
+            assert!(!p.split(' ').any(|w| w == stop), "{p:?} has {stop:?}");
+        }
+    }
+
+    // Each sentence filtered with its own language's stopwords.
+    let mixed = "Die Extraktion von Schlüsselwörtern wählt die Phrasen aus, die ein \
+        Dokument am besten beschreiben. Graph methods rank the words of a document \
+        with PageRank and need no training data.";
+    for lang in ["auto-sentence", "auto"] {
+        let o = distil(&["keywords", "-m", "rake", "--lang", lang], Some(mixed));
+        assert!(o.status.success(), "{}", stderr(&o));
+    }
+    let o = distil(
+        &[
+            "keywords",
+            "-m",
+            "position-rank",
+            "--lang",
+            "auto-sentence",
+            "-k",
+            "20",
+        ],
+        Some(mixed),
+    );
+    let phrases: Vec<String> = rows(&stdout(&o)).into_iter().map(|(_, p)| p).collect();
+    for p in &phrases {
+        for stop in ["die", "von", "ein", "am", "the", "of", "a", "with", "and"] {
+            assert!(!p.split(' ').any(|w| w == stop), "{p:?} has {stop:?}");
+        }
+    }
+    let o = distil(
+        &[
+            "summarize",
+            "-m",
+            "luhn",
+            "--lang",
+            "auto-sentence",
+            "-n",
+            "1",
+        ],
+        Some(mixed),
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(stdout(&o).lines().count(), 1);
+}
+
+#[test]
 fn topical_page_rank_with_a_topic_file() {
     let topics = temp_file(
         "topics.tsv",

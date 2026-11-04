@@ -115,16 +115,20 @@ distil keywords -k 5 https://en.wikipedia.org/wiki/PageRank
 0.0902	page's pagerank
 0.0858	google directory pagerank
 0.0849	google pagerank
-0.0773	using personalized pagerank
+0.0769	pagerank citation ranking
 ```
 
 - `distil keywords`: `-m/--method` (default `position-rank`; `distil
-  methods` lists the 14 available), `-k/--top`, `--lang` for the stopword
-  list (an ISO 639-1 code, or `auto` to detect it with whatlang), `--json`
+  methods` lists the 14 available), `-k/--top`, `--lang` (below), `--json`
   for one JSON object per input per line. With several
   inputs, `expand-rank` uses the others as neighbours, `collab-rank` ranks
   them as one cluster, and `tf-idf` and `kp-miner` take document
   frequencies from them; `topical-page-rank` needs `--topics <FILE>`.
+- `--lang` (for `keywords` and `summarize`): an ISO 639-1 code (`en`, the
+  default, `de`, `fr`, ...) sets the stopwords and the stemmer; `auto`
+  detects one language per input and `auto-sentence` one per sentence
+  (whatlang; sentences too short to call take their input's language, and
+  English is the fallback).
 - `distil text`: print the extracted text.
 - `distil methods`: list the methods.
 
@@ -136,11 +140,37 @@ errors.
 ## Languages
 
 Sentences and words follow the Unicode text segmentation rules (UAX #29),
-with an English abbreviation list for sentence ends, and English stopwords
-by default. `stopwords::for_language` has NLTK's stopword lists for German,
-French, Spanish, Portuguese, Italian, Dutch, Russian, Arabic and 24 more
-(`stopwords::languages`), and every method takes them through
-`with_stopwords`.
+adapted to prose by textprep (hard-wrapped lines, English abbreviations,
+hyphenated compounds). Every method takes a `Language` (`with_language`):
+NLTK's stopword list for that language and its Snowball stemmer.
+`with_stopwords` replaces only the list. English is the default. NLTK has
+lists for 33 languages (`stopwords::languages`); 18 of them have a Snowball
+stemmer, and words in the others are only lowercased.
+
+```rust
+use distil::{KeywordExtractor, Language, PositionRank};
+
+let german = Language::from_code("de").unwrap();
+let phrases = PositionRank::new()
+    .with_language(german)
+    .extract("Die Graphen haben viele Knoten. Ein Graph hat Knoten und Kanten.", 3);
+assert!(!phrases.is_empty());
+```
+
+A `text::Document` carries a language per sentence, chosen by a
+`LanguagePolicy` in `Document::from_text_with`: `Fixed` (English by
+default), `Detect` (one language per document) or `DetectPerSentence`
+(each sentence stemmed and filtered in its own language). Detection needs
+the `detect` feature (whatlang, through textprep) or your own detector
+(`Document::from_text_with_detector`).
+
+Stopwords do two jobs: they end candidate phrases in untagged text, and
+they decide which words count in scores. In untagged English text,
+candidates also end at the 570 words of the SMART list, while scores use
+NLTK's list; other languages use NLTK's list for both. `with_delimiters`
+replaces the SMART extension, for example with a domain list, and an empty
+list keeps NLTK's list alone (`RakeExtractor::nltk()`).
+
 UAX #29 splits Chinese, Japanese and Thai into single characters, so
 pre-tokenize such text and pass space-separated tokens.
 

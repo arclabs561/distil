@@ -112,6 +112,16 @@ fn compare(got: &[(String, f64)], want: &[(&str, f64)]) -> Vec<String> {
     problems
 }
 
+/// The fixture comes from pke's own stoplist (spaCy's English list), not
+/// distil's default; a swapped list fails here.
+#[test]
+fn reference_list_is_pkes() {
+    assert_eq!(fixture::STOPLIST_LEN, 326);
+    for case in fixture::CASES {
+        assert!(!case.stopwords.is_empty(), "{}", case.name);
+    }
+}
+
 #[test]
 fn methods_match_pke() {
     let mut failures = Vec::new();

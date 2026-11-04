@@ -18,13 +18,13 @@ use super::{
     content_stems, cosine, counts, select, sentence_idf, weighted, word_count, Budget,
     SentenceExtractor,
 };
-use crate::text::{is_content, Document};
+use crate::text::{is_content_in, Document, Roles};
 use std::collections::HashSet;
 
 /// MMR sentence selection.
 #[derive(Debug, Clone)]
 pub struct Mmr {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     lambda: f64,
     query: Option<Vec<String>>,
 }
@@ -39,7 +39,7 @@ impl Mmr {
     /// Lambda 0.7, relevance to the whole document, English stopwords.
     pub fn new() -> Self {
         Mmr {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             lambda: 0.7,
             query: None,
         }
@@ -47,7 +47,15 @@ impl Mmr {
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -61,16 +69,16 @@ impl Mmr {
     pub fn with_query(mut self, query: &Document) -> Self {
         self.query = Some(
             query
-                .tokens()
-                .filter(|t| is_content(t, &self.stopwords))
-                .map(|t| t.stem.clone())
+                .tokens_in()
+                .filter(|(t, l)| is_content_in(t, self.stopwords.language(), *l))
+                .map(|(t, _)| t.stem.clone())
                 .collect(),
         );
         self
     }
 
     fn select(&self, doc: &Document, budget: Budget) -> Vec<(usize, f64)> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let idf = sentence_idf(&terms);
         let idf = |w: &str| idf.get(w).copied().unwrap_or(0.0);
         let vectors = weighted(&counts(&terms), &idf);

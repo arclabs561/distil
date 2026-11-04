@@ -21,15 +21,16 @@
 //! ACM 16(2), 1969. Parity: sumy `EdmundsonSummarizer`.
 
 use super::{by_score, SentenceExtractor};
-use crate::text::{is_content, stem, Document};
+use crate::text::{is_content_in, Document, Roles};
+use crate::Language;
 use std::collections::{HashMap, HashSet};
 
 /// Edmundson's cue, key, title and location method.
 #[derive(Debug, Clone)]
 pub struct Edmundson {
-    stopwords: HashSet<String>,
-    bonus: HashSet<String>,
-    stigma: HashSet<String>,
+    stopwords: Roles,
+    bonus: Vec<String>,
+    stigma: Vec<String>,
     title: HashSet<String>,
     paragraphs: Vec<usize>,
     weights: [f64; 4],
@@ -47,9 +48,9 @@ impl Edmundson {
     /// one paragraph.
     pub fn new() -> Self {
         Edmundson {
-            stopwords: crate::default_stopwords(),
-            bonus: HashSet::new(),
-            stigma: HashSet::new(),
+            stopwords: Roles::default(),
+            bonus: Vec::new(),
+            stigma: Vec::new(),
             title: HashSet::new(),
             paragraphs: Vec::new(),
             weights: [1.0, 0.0, 1.0, 1.0],
@@ -59,27 +60,38 @@ impl Edmundson {
 
     /// Replace the stopword (null word) list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
         self
     }
 
-    /// Bonus words, stemmed with [`stem`].
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Bonus words, compared by stem: each sentence stems them in its
+    /// language ([`Language::stem`]; the method's language for sentences
+    /// without one).
     pub fn with_bonus_words<S: AsRef<str>>(mut self, words: &[S]) -> Self {
-        self.bonus = words.iter().map(|w| stem(w.as_ref())).collect();
+        self.bonus = words.iter().map(|w| w.as_ref().to_string()).collect();
         self
     }
 
-    /// Stigma words, stemmed with [`stem`].
+    /// Stigma words, compared by stem as bonus words are.
     pub fn with_stigma_words<S: AsRef<str>>(mut self, words: &[S]) -> Self {
-        self.stigma = words.iter().map(|w| stem(w.as_ref())).collect();
+        self.stigma = words.iter().map(|w| w.as_ref().to_string()).collect();
         self
     }
 
     /// Title or heading text; its content words' stems are the title words.
     pub fn with_title(mut self, title: &Document) -> Self {
         self.title = title
-            .tokens()
-            .filter(|t| is_content(t, &self.stopwords))
+            .tokens_in()
+            .filter(|(t, l)| is_content_in(t, self.stopwords.language(), *l))
+            .map(|(t, _)| t)
             .map(|t| t.stem.clone())
             .collect();
         self
@@ -110,9 +122,24 @@ impl Edmundson {
 
 impl SentenceExtractor for Edmundson {
     fn rank(&self, doc: &Document) -> Vec<(usize, f64)> {
+        // Bonus and stigma stems per language code.
+        let language = |l: Option<&'_ Language>| l.unwrap_or(self.stopwords.language()).clone();
+        let mut cues: HashMap<&str, (HashSet<String>, HashSet<String>)> = HashMap::new();
+        for (_, l) in doc.sentences_in() {
+            let l = language(l);
+            let stems = |words: &[String]| words.iter().map(|w| l.stem(w)).collect();
+            cues.entry(l.code())
+                .or_insert_with(|| (stems(&self.bonus), stems(&self.stigma)));
+        }
+        let sentence_cues: Vec<&(HashSet<String>, HashSet<String>)> = doc
+            .sentences_in()
+            .map(|(_, l)| &cues[language(l).code()])
+            .collect();
         let mut bonus_counts: HashMap<&str, usize> = HashMap::new();
-        for t in doc.tokens().filter(|t| self.bonus.contains(&t.stem)) {
-            *bonus_counts.entry(t.stem.as_str()).or_insert(0) += 1;
+        for ((s, _), (bonus, _)) in doc.sentences_in().zip(&sentence_cues) {
+            for t in s.iter().filter(|t| bonus.contains(&t.stem)) {
+                *bonus_counts.entry(t.stem.as_str()).or_insert(0) += 1;
+            }
         }
         let max = bonus_counts.values().copied().max().unwrap_or(0) as f64;
         let key: HashSet<&str> = bonus_counts
@@ -141,11 +168,12 @@ impl SentenceExtractor for Edmundson {
             .sentences()
             .iter()
             .zip(location)
-            .map(|(s, loc)| {
+            .zip(&sentence_cues)
+            .map(|((s, loc), (bonus, stigma))| {
                 let words = || s.iter().filter(|t| !t.is_punct());
                 let count = |set: &dyn Fn(&str) -> bool| words().filter(|t| set(&t.stem)).count();
-                let cue = count(&|w| self.bonus.contains(w)) as f64
-                    - count(&|w| self.stigma.contains(w)) as f64;
+                let cue =
+                    count(&|w| bonus.contains(w)) as f64 - count(&|w| stigma.contains(w)) as f64;
                 let key = count(&|w| key.contains(w)) as f64;
                 let title = count(&|w| self.title.contains(w)) as f64;
                 w_cue * cue + w_key * key + w_title * title + w_location * (title + loc)

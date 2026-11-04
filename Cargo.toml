@@ -13,23 +13,22 @@ categories = ["text-processing"]
 
 [dependencies]
 graphops = "0.1.3"
-rust-stemmers = "1.2"
-# UAX #29 sentence and word boundaries.
-unicode-segmentation = "1.12"
-# NLTK's stopword lists, compiled in as static arrays by its build script
-# (serde_json is a build dependency only).
-stop-words = { version = "0.10", default-features = false, features = ["nltk"] }
+# Sentence and word boundaries (UAX #29 adapted to prose), NLTK's stopword
+# lists, the SMART list and Snowball stemmers per language.
+textprep = { version = "0.3.1", features = ["stem"] }
 
 # The command-line tool and its dependencies; library users get none of them.
 clap = { version = "4.5", optional = true, default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 deformat = { version = "0.17", optional = true, features = ["readability", "pdf", "docx", "epub", "rtf", "xlsx", "pptx", "encoding_rs"] }
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "gzip"] }
-whatlang = { version = "0.18", optional = true }
 
 [features]
 default = []
+# `detect` adds language detection (whatlang, through textprep) for
+# `LanguagePolicy::Detect` and `LanguagePolicy::DetectPerSentence`.
+detect = ["textprep/detect"]
 # `cli` builds the `distil` binary (keyphrases from files, URLs and stdin).
-cli = ["dep:clap", "dep:deformat", "dep:ureq", "dep:whatlang"]
+cli = ["dep:clap", "dep:deformat", "dep:ureq", "detect"]
 
 [[bin]]
 name = "distil"

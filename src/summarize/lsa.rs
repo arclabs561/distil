@@ -27,7 +27,7 @@
 //! patches this to the augmented frequency above).
 
 use super::{by_score, content_stems, SentenceExtractor};
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use std::collections::HashSet;
 
 /// Which LSA sentence score to use.
@@ -43,7 +43,7 @@ pub enum LsaVariant {
 /// LSA sentence ranking.
 #[derive(Debug, Clone)]
 pub struct Lsa {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     variant: LsaVariant,
     dimensions: Option<usize>,
 }
@@ -58,7 +58,7 @@ impl Lsa {
     /// Steinberger and Jezek's score over all dimensions, English stopwords.
     pub fn new() -> Self {
         Lsa {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             variant: LsaVariant::default(),
             dimensions: None,
         }
@@ -66,7 +66,15 @@ impl Lsa {
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -85,7 +93,7 @@ impl Lsa {
 
 impl SentenceExtractor for Lsa {
     fn rank(&self, doc: &Document) -> Vec<(usize, f64)> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let n = terms.len();
         let columns: Vec<super::Vector> = terms
             .iter()

@@ -64,13 +64,30 @@
 //!
 //! # Languages
 //!
-//! Sentences and words follow the Unicode text segmentation rules (UAX #29;
-//! see [`text::sentence_ranges`]), and English stopwords are the default.
-//! [`stopwords::for_language`] has NLTK's lists for German, French, Spanish,
-//! Portuguese, Italian, Dutch, Russian, Arabic and 24 more
-//! ([`stopwords::languages`]). UAX #29 has no dictionary, so it splits
-//! Chinese, Japanese (except katakana) and Thai into single characters;
-//! pre-tokenize such text and pass space-separated tokens.
+//! Every method takes a [`Language`] (`with_language`): its stopword list
+//! and its Snowball stemmer. `with_stopwords` stays as a shorthand that
+//! replaces only the list. The default is English with NLTK's 198
+//! stopwords and the Porter2 stemmer; in untagged English text, candidate
+//! phrases also end at SMART's words ([`stopwords`] explains the two
+//! roles). NLTK has lists for 33 languages
+//! ([`stopwords::languages`]); 18 of them have a Snowball stemmer, and the
+//! others keep words unstemmed (lowercased).
+//!
+//! A [`text::Document`] carries a language per sentence, chosen by a
+//! [`LanguagePolicy`] ([`text::Document::from_text_with`]): `Fixed` (the
+//! default, English), `Detect` (one language per document) or
+//! `DetectPerSentence` (each sentence stemmed and filtered in its own
+//! language). The detection policies need the `detect` feature (whatlang,
+//! through textprep) or a caller's detector
+//! ([`text::Document::from_text_with_detector`]). A method's language
+//! applies to sentences in that language; sentences in other languages use
+//! their own language's stopwords ([`text::Stoplist`]).
+//!
+//! Sentences and words follow the Unicode text segmentation rules (UAX #29,
+//! adapted to prose by textprep; see [`text::sentence_ranges`]). UAX #29 has
+//! no dictionary, so it splits Chinese, Japanese (except katakana) and Thai
+//! into single characters; pre-tokenize such text and pass space-separated
+//! tokens.
 
 pub mod collabrank;
 pub mod communitycluster;
@@ -111,6 +128,10 @@ pub use singlerank::SingleRank;
 #[doc(inline)]
 pub use stopwords::default_stopwords;
 pub use summarize::{Budget, SentenceExtractor};
+/// A language's stopwords and stemmer, from textprep.
+pub use textprep::language::Language;
+/// Which language applies to which sentence, from textprep.
+pub use textprep::language::LanguagePolicy;
 pub use textrank::TextRank;
 pub use tfidf::{DocumentFrequency, TfIdf};
 pub use tomokiyohurst::TomokiyoHurst;

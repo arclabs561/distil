@@ -19,13 +19,26 @@
 //!   for example tags in {NOUN, PROPN, ADJ}.
 //! - [`noun_phrases`]: matches of `(ADJ)*(NOUN|PROPN)+`.
 //!
-//! Stems come from the English Snowball stemmer (Porter2) in `rust-stemmers`.
+//! # Languages
+//!
+//! Each sentence of a document has a [`Language`], chosen by a
+//! [`LanguagePolicy`] in [`Document::from_text_with`]: one fixed language
+//! (English by default), one detected for the document, or one detected per
+//! sentence. A sentence is stemmed with its language's Snowball stemmer
+//! (Porter2 for English; languages without a Snowball stemmer keep the
+//! lowercased word) and filtered with its language's stopwords. A method's
+//! own language ([`Stoplist`] for `Language`) applies to the sentences in
+//! that language, so a method's custom stopword list still wins there.
+//!
 //! pke uses NLTK's Porter stemmer, which differs from Porter2 on about 2% of
 //! word types (157 of the 7,335 alphabetic types in the Inspec test split).
 //! Callers who need specific stems pass them through [`Document::from_tokens`].
 
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
+use std::sync::OnceLock;
+
+use crate::{Language, LanguagePolicy};
+use textprep::language::Detector;
 
 /// Universal part-of-speech tags (Universal Dependencies v2 UPOS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,11 +109,16 @@ pub struct Token {
 }
 
 impl Token {
-    /// A token with its stem computed by [`stem`].
+    /// A token with its English stem, from [`stem`].
     pub fn new(word: &str, pos: Option<Pos>) -> Token {
+        Token::new_in(word, pos, english())
+    }
+
+    /// A token stemmed in `language` ([`Language::stem`]).
+    pub fn new_in(word: &str, pos: Option<Pos>, language: &Language) -> Token {
         Token {
             word: word.to_string(),
-            stem: stem(word),
+            stem: language.stem(word),
             pos,
         }
     }
@@ -111,163 +129,34 @@ impl Token {
     }
 }
 
-/// Lowercase and stem an English word with the Snowball English stemmer.
+/// English, built once.
+pub(crate) fn english() -> &'static Language {
+    static EN: OnceLock<Language> = OnceLock::new();
+    EN.get_or_init(Language::english)
+}
+
+/// Lowercase and stem an English word with the Snowball English stemmer
+/// (Porter2). U+2018 and U+2019 count as `'`, so `company’s` stems like
+/// `company's`. Same as `Language::english().stem(word)`.
 pub fn stem(word: &str) -> String {
-    thread_local! {
-        static STEMMER: rust_stemmers::Stemmer =
-            rust_stemmers::Stemmer::create(rust_stemmers::Algorithm::English);
-    }
-    let lower = word.to_lowercase();
-    STEMMER.with(|s| s.stem(&lower).into_owned())
+    english().stem(word)
 }
 
 /// Byte ranges of the sentences of `text`, without surrounding whitespace.
 ///
-/// Boundaries are the Unicode sentence boundaries of UAX #29 (from
-/// `unicode-segmentation`), so a sentence ends after `.`, `!`, `?` and the
-/// other sentence terminals, including any closing quotes or brackets that
-/// follow them (`2014." Later` splits after the quote), but not before a
-/// lowercase word (`see fig. two`). Two changes adapt UAX #29 to running
-/// text:
-///
-/// - A single line break does not end a sentence; text is often hard
-///   wrapped. A break that UAX #29 places only because of a line break is
-///   kept when the line break is part of a blank line. Otherwise it is kept
-///   only where UAX #29 would also break if the line break were a space.
-/// - A period after a known English abbreviation (`Mr.`, `e.g.`, `U.S.`,
-///   single-letter initials) does not end a sentence, unless the next word
-///   is a common sentence opener such as "The", "We" or "However" (`the
-///   U.S. The` splits, `U.S. Senator` does not). Both word lists and the
-///   rule come from the sentencex segmenter (Wikimedia; MIT License);
-///   abbreviations are matched lowercased, openers case-sensitively.
-pub fn sentence_ranges(text: &str) -> Vec<Range<usize>> {
-    use unicode_segmentation::UnicodeSegmentation;
-    let mut out = Vec::new();
-    let mut start = 0;
-    for (i, chunk) in text.split_sentence_bound_indices() {
-        let end = i + chunk.len();
-        if end < text.len() && !keep_break(&text[start..end], &text[end..]) {
-            continue;
-        }
-        let body = text[start..end].trim();
-        if !body.is_empty() {
-            let lead = text[start..end].len() - text[start..end].trim_start().len();
-            out.push(start + lead..start + lead + body.len());
-        }
-        start = end;
-    }
-    out
-}
-
-/// Whether a UAX #29 sentence break between `before` and `after` is kept.
-fn keep_break(before: &str, after: &str) -> bool {
-    use unicode_segmentation::UnicodeSegmentation;
-    let body = before.trim_end();
-    let gap = &before[body.len()..];
-    let line_breaks = gap
-        .replace("\r\n", "\n")
-        .chars()
-        .filter(|&c| is_line_break(c))
-        .count();
-    if line_breaks >= 2 {
-        return true;
-    }
-    if line_breaks > 0 {
-        // Would UAX #29 break here if every line break were a space?
-        let flow = |c: char| if is_line_break(c) { ' ' } else { c };
-        let mut tail: Vec<char> = body.chars().rev().take(32).map(flow).collect();
-        tail.reverse();
-        let tail: String = tail.into_iter().collect();
-        let next: String = after.trim_start().chars().take(32).map(flow).collect();
-        let flowed = format!("{tail} {next}");
-        let cut = tail.len() + 1;
-        if !flowed.split_sentence_bound_indices().any(|(i, _)| i == cut) {
-            return false;
-        }
-    }
-    !ends_with_abbreviation(body) || starts_sentence(after)
-}
-
-/// Reads one of the vendored word lists: a word per line, `#` comments.
-fn word_list(list: &'static str) -> impl Iterator<Item = &'static str> {
-    list.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-}
-
-/// True when the first word of `after` is a sentence starter such as "The",
-/// "We" or "However" (case-sensitive).
-fn starts_sentence(after: &str) -> bool {
-    thread_local! {
-        static STARTERS: HashSet<&'static str> =
-            word_list(include_str!("sentence_starters_en.txt")).collect();
-    }
-    let after = after.trim_start();
-    let end = after
-        .find(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '!' | '?'))
-        .unwrap_or(after.len());
-    end > 0 && STARTERS.with(|s| s.contains(&after[..end]))
-}
-
-/// UAX #29's paragraph separators (classes CR, LF and Sep).
-fn is_line_break(c: char) -> bool {
-    matches!(c, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')
-}
-
-/// True when `body` ends with a period directly after a known abbreviation.
-fn ends_with_abbreviation(body: &str) -> bool {
-    thread_local! {
-        static ABBREVIATIONS: HashSet<String> = word_list(include_str!("abbreviations_en.txt"))
-            .map(str::to_lowercase)
-            .collect();
-    }
-    let Some(head) = body.strip_suffix('.') else {
-        return false;
-    };
-    // The last whitespace-separated word, without opening quotes or brackets.
-    let word = head
-        .rsplit(char::is_whitespace)
-        .next()
-        .unwrap_or("")
-        .trim_start_matches(|c: char| !c.is_alphanumeric());
-    !word.is_empty()
-        && word.chars().all(|c| c.is_alphanumeric() || c == '.')
-        && ABBREVIATIONS.with(|a| a.contains(&word.to_lowercase()))
-}
+/// A re-export of [`textprep::segment::sentence_byte_ranges`]: UAX #29
+/// sentence boundaries, with single line breaks joined and periods after
+/// known English abbreviations (`Mr.`, `e.g.`, `U.S.`) kept inside the
+/// sentence.
+pub use textprep::segment::sentence_byte_ranges as sentence_ranges;
 
 /// Byte ranges of the tokens of `text`, skipping whitespace.
 ///
-/// Tokens are the Unicode word boundaries of UAX #29 (from
-/// `unicode-segmentation`): "don't", "3.5", "v3.5", "e.g" and "U.S" are
-/// single words, and every punctuation character is its own token. One
-/// change: words joined by a single `-` with no space around it stay one
-/// token ("state-of-the-art"), where UAX #29 would split at each hyphen.
-pub fn word_ranges(text: &str) -> Vec<Range<usize>> {
-    use unicode_segmentation::UnicodeSegmentation;
-    let is_word = |r: &Range<usize>| text[r.clone()].chars().any(char::is_alphanumeric);
-    let mut out: Vec<Range<usize>> = Vec::new();
-    for (i, segment) in text.split_word_bound_indices() {
-        if segment.chars().all(char::is_whitespace) {
-            continue;
-        }
-        let range = i..i + segment.len();
-        if let [.., left, hyphen] = out.as_slice() {
-            let joined = is_word(&range)
-                && &text[hyphen.clone()] == "-"
-                && hyphen.end == range.start
-                && left.end == hyphen.start
-                && is_word(left);
-            if joined {
-                let start = left.start;
-                out.truncate(out.len() - 2);
-                out.push(start..range.end);
-                continue;
-            }
-        }
-        out.push(range);
-    }
-    out
-}
+/// A re-export of [`textprep::segment::word_byte_ranges`]: UAX #29 word
+/// boundaries ("don't", "3.5", "U.S" are single words, every punctuation
+/// character is its own token), with hyphenated compounds such as
+/// "state-of-the-art" kept whole.
+pub use textprep::segment::word_byte_ranges as word_ranges;
 
 /// A tokenized document: sentences of tokens.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -275,54 +164,109 @@ pub struct Document {
     sentences: Vec<Vec<Token>>,
     /// Byte range of each sentence in the source text (from_text only).
     spans: Vec<std::ops::Range<usize>>,
+    /// Language of each sentence; empty for documents built from tokens.
+    languages: Vec<Language>,
+}
+
+/// A detector that never answers, for detection policies without the
+/// `detect` feature.
+#[cfg(not(feature = "detect"))]
+fn no_detection(_: &str) -> Option<Language> {
+    None
 }
 
 impl Document {
-    /// Tokenize, split into sentences and stem untagged text.
+    /// Tokenize, split into sentences and stem untagged English text.
     ///
     /// Sentences follow [`sentence_ranges`]; words follow [`word_ranges`].
     /// [`Document::sentence_spans`] gives each sentence's byte range in
-    /// `text`, from its first token to its last non-space character.
+    /// `text`, from its first token to its last non-space character. The
+    /// same as [`Document::from_text_with`] with the default policy,
+    /// `LanguagePolicy::Fixed(Language::english())`.
     pub fn from_text(text: &str) -> Document {
-        let mut sentences = Vec::new();
-        let mut spans = Vec::new();
-        for range in sentence_ranges(text) {
+        Document::from_text_with(text, &LanguagePolicy::default())
+    }
+
+    /// Like [`Document::from_text`], with each sentence's language chosen
+    /// by `policy` and each sentence stemmed in its language.
+    ///
+    /// `Detect` and `DetectPerSentence` use whatlang through textprep's
+    /// detector with the `detect` feature. Without it they detect nothing:
+    /// `Detect` gives English and `DetectPerSentence` its fallback. Use
+    /// [`Document::from_text_with_detector`] for another detector.
+    pub fn from_text_with(text: &str, policy: &LanguagePolicy) -> Document {
+        #[cfg(feature = "detect")]
+        let detector = textprep::language::WhatlangDetector::new();
+        #[cfg(not(feature = "detect"))]
+        let detector = no_detection;
+        Document::from_text_with_detector(text, policy, &detector)
+    }
+
+    /// Like [`Document::from_text_with`], detecting languages with
+    /// `detector` (any [`Detector`], including a closure
+    /// `Fn(&str) -> Option<Language>`). Texts with fewer than 10 letters
+    /// are never passed to it.
+    pub fn from_text_with_detector<D: Detector + ?Sized>(
+        text: &str,
+        policy: &LanguagePolicy,
+        detector: &D,
+    ) -> Document {
+        let mut doc = Document::default();
+        for s in textprep::language::sentence_languages_with(text, policy, detector) {
+            let range = s.range;
             let words = word_ranges(&text[range.clone()]);
             let Some(first) = words.first() else {
                 continue;
             };
-            spans.push(range.start + first.start..range.end);
-            sentences.push(
+            doc.spans.push(range.start + first.start..range.end);
+            doc.sentences.push(
                 words
                     .into_iter()
-                    .map(|w| Token::new(&text[range.start + w.start..range.start + w.end], None))
+                    .map(|w| {
+                        let word = &text[range.start + w.start..range.start + w.end];
+                        Token::new_in(word, None, &s.language)
+                    })
                     .collect(),
             );
+            doc.languages.push(s.language);
         }
-        Document { sentences, spans }
+        doc
     }
 
     /// Build from the caller's tokenizer and tagger: sentences of
-    /// `(word, tag)` pairs. Stems are computed with [`stem`].
+    /// `(word, tag)` pairs, stemmed in English with [`stem`].
     pub fn from_tagged<S: AsRef<str>>(sentences: &[Vec<(S, Pos)>]) -> Document {
+        Document::from_tagged_in(sentences, english())
+    }
+
+    /// Like [`Document::from_tagged`], with every sentence in `language`
+    /// and stemmed with its stemmer.
+    pub fn from_tagged_in<S: AsRef<str>>(
+        sentences: &[Vec<(S, Pos)>],
+        language: &Language,
+    ) -> Document {
         Document {
             spans: Vec::new(),
+            languages: vec![language.clone(); sentences.len()],
             sentences: sentences
                 .iter()
                 .map(|s| {
                     s.iter()
-                        .map(|(w, p)| Token::new(w.as_ref(), Some(*p)))
+                        .map(|(w, p)| Token::new_in(w.as_ref(), Some(*p), language))
                         .collect()
                 })
                 .collect(),
         }
     }
 
-    /// Build from fully specified tokens, including stems.
+    /// Build from fully specified tokens, including stems. The sentences
+    /// have no language, so methods filter them with their own
+    /// ([`Stoplist`]).
     pub fn from_tokens(sentences: Vec<Vec<Token>>) -> Document {
         Document {
             sentences,
             spans: Vec::new(),
+            languages: Vec::new(),
         }
     }
 
@@ -332,9 +276,29 @@ impl Document {
         &self.spans
     }
 
+    /// Language of each sentence; empty for documents built with
+    /// [`Document::from_tokens`].
+    pub fn sentence_languages(&self) -> &[Language] {
+        &self.languages
+    }
+
     /// The sentences.
     pub fn sentences(&self) -> &[Vec<Token>] {
         &self.sentences
+    }
+
+    /// Each sentence with its language, if the document has one.
+    pub(crate) fn sentences_in(&self) -> impl Iterator<Item = (&[Token], Option<&Language>)> {
+        self.sentences
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_slice(), self.languages.get(i)))
+    }
+
+    /// All tokens in order, each with its sentence's language.
+    pub(crate) fn tokens_in(&self) -> impl Iterator<Item = (&Token, Option<&Language>)> {
+        self.sentences_in()
+            .flat_map(|(s, l)| s.iter().map(move |t| (t, l)))
     }
 
     /// All tokens in order.
@@ -355,6 +319,126 @@ impl Document {
     /// True when every token has a part-of-speech tag.
     pub fn is_tagged(&self) -> bool {
         !self.is_empty() && self.tokens().all(|t| t.pos.is_some())
+    }
+}
+
+/// A stopword lookup that can depend on the sentence's language.
+///
+/// - A `HashSet<String>` is one list for every sentence. Words are compared
+///   lowercased, also with U+2018 and U+2019 replaced by `'`.
+/// - A [`Language`] is a method's language: its own stopwords for sentences
+///   in that language (same code) and for sentences without a language
+///   ([`Document::from_tokens`]), and the sentence language's stopwords
+///   for sentences in another language.
+pub trait Stoplist {
+    /// Whether `word` is a stopword in a sentence of language `sentence`.
+    fn is_stopword_in(&self, word: &str, sentence: Option<&Language>) -> bool;
+}
+
+impl Stoplist for HashSet<String> {
+    fn is_stopword_in(&self, word: &str, _: Option<&Language>) -> bool {
+        let lower = word.to_lowercase();
+        self.contains(&lower)
+            || self.contains(textprep::stopwords::fold_apostrophes(&lower).as_ref())
+    }
+}
+
+impl Stoplist for Language {
+    fn is_stopword_in(&self, word: &str, sentence: Option<&Language>) -> bool {
+        match sentence {
+            Some(s) if s.code() != self.code() => s.is_stopword(word),
+            _ => self.is_stopword(word),
+        }
+    }
+}
+
+/// Stopwords split by role (see the [`crate::stopwords`] module): the
+/// language's list for term weighting, and the same list plus an extension
+/// for candidate boundaries in untagged text.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct Roles {
+    language: Language,
+    /// Extra candidate delimiters, lowercase with `'` for U+2018 and U+2019;
+    /// `None` is the default, SMART for English sentences.
+    delimiters: Option<HashSet<String>>,
+}
+
+impl Roles {
+    pub(crate) fn set_language(&mut self, language: Language) {
+        self.language = language;
+    }
+
+    pub(crate) fn set_stopwords(&mut self, stopwords: HashSet<String>) {
+        self.language = self.language.clone().with_stopwords(stopwords);
+    }
+
+    pub(crate) fn set_delimiters<I: IntoIterator<Item = S>, S: AsRef<str>>(&mut self, words: I) {
+        self.delimiters = Some(words.into_iter().map(|w| key(w.as_ref())).collect());
+    }
+
+    /// The language, also the stoplist for term weighting.
+    pub(crate) fn language(&self) -> &Language {
+        &self.language
+    }
+
+    /// The stoplist for candidate boundaries in `doc`: with the extension
+    /// when `doc` is untagged, the language's stopwords alone when it is
+    /// tagged (part-of-speech tags select its candidates).
+    pub(crate) fn delimiting(&self, doc: &Document) -> Delimiting<'_> {
+        self.delimiting_untagged(!doc.is_tagged())
+    }
+
+    /// [`Roles::delimiting`] for text that is (or is not) untagged.
+    pub(crate) fn delimiting_untagged(&self, untagged: bool) -> Delimiting<'_> {
+        Delimiting {
+            roles: self,
+            untagged,
+        }
+    }
+
+    /// `text` as a document in the language, for `extract`.
+    pub(crate) fn document(&self, text: &str) -> Document {
+        Document::from_text_with(text, &LanguagePolicy::Fixed(self.language.clone()))
+    }
+}
+
+/// Lowercase, with `'` for U+2018 and U+2019: how stoplists store words.
+fn key(word: &str) -> String {
+    textprep::stopwords::fold_apostrophes(word).to_lowercase()
+}
+
+/// The SMART English list, built once.
+fn smart() -> &'static HashSet<String> {
+    static SMART: OnceLock<HashSet<String>> = OnceLock::new();
+    SMART.get_or_init(textprep::stopwords::smart_english)
+}
+
+/// A [`Roles`]'s candidate-boundary stoplist: the language's stopwords,
+/// plus, in untagged text, the extension. The default extension is SMART
+/// in English sentences; a caller's extension applies in sentences of the
+/// method's language.
+pub(crate) struct Delimiting<'a> {
+    roles: &'a Roles,
+    untagged: bool,
+}
+
+impl Stoplist for Delimiting<'_> {
+    fn is_stopword_in(&self, word: &str, sentence: Option<&Language>) -> bool {
+        let own = &self.roles.language;
+        if own.is_stopword_in(word, sentence) {
+            return true;
+        }
+        if !self.untagged {
+            return false;
+        }
+        let language = match sentence {
+            Some(s) if s.code() != own.code() => s,
+            _ => own,
+        };
+        match &self.roles.delimiters {
+            None => language.code() == "en" && smart().contains(&key(word)),
+            Some(extra) => language.code() == own.code() && extra.contains(&key(word)),
+        }
     }
 }
 
@@ -421,12 +505,20 @@ impl Collector {
 
 /// Maximal runs of consecutive tokens (within a sentence) accepted by `keep`.
 pub fn longest_sequences(doc: &Document, keep: impl Fn(&Token) -> bool) -> Vec<Candidate> {
+    longest_sequences_in(doc, |t, _| keep(t))
+}
+
+/// [`longest_sequences`] with each token's sentence language.
+pub(crate) fn longest_sequences_in(
+    doc: &Document,
+    keep: impl Fn(&Token, Option<&Language>) -> bool,
+) -> Vec<Candidate> {
     let mut c = Collector::default();
     let mut shift = 0;
-    for sentence in doc.sentences() {
+    for (sentence, language) in doc.sentences_in() {
         let mut start = None;
         for (j, token) in sentence.iter().enumerate() {
-            match (keep(token), start) {
+            match (keep(token, language), start) {
                 (true, None) => start = Some(j),
                 (false, Some(s)) => {
                     c.add(&sentence[s..j], shift + s);
@@ -444,37 +536,58 @@ pub fn longest_sequences(doc: &Document, keep: impl Fn(&Token) -> bool) -> Vec<C
 }
 
 /// True when the token is neither punctuation nor (lowercased) a stopword.
+/// U+2018 and U+2019 in the word also match `'` in the list.
 pub fn is_content(token: &Token, stopwords: &HashSet<String>) -> bool {
-    !token.is_punct() && !stopwords.contains(&token.word.to_lowercase())
+    is_content_in(token, stopwords, None)
+}
+
+/// True when the token is neither punctuation nor a stopword of a sentence
+/// in `language` (see [`Stoplist`]).
+pub fn is_content_in<S: Stoplist + ?Sized>(
+    token: &Token,
+    stopwords: &S,
+    language: Option<&Language>,
+) -> bool {
+    !token.is_punct() && !stopwords.is_stopword_in(&token.word, language)
 }
 
 /// Maximal stopword- and punctuation-delimited phrases of at most
-/// `max_words` words; longer runs are dropped.
-pub fn delimited_phrases(
+/// `max_words` words; longer runs are dropped. Each sentence is delimited
+/// with the stopwords of its language ([`Stoplist`]).
+pub fn delimited_phrases<S: Stoplist + ?Sized>(
     doc: &Document,
-    stopwords: &HashSet<String>,
+    stopwords: &S,
     max_words: usize,
 ) -> Vec<Candidate> {
-    let mut out = longest_sequences(doc, |t| is_content(t, stopwords));
+    let mut out = longest_sequences_in(doc, |t, l| is_content_in(t, stopwords, l));
     out.retain(|c| c.len() <= max_words);
     out
 }
 
 /// Every n-gram of 1 to `max_n` words inside stopword- and
 /// punctuation-delimited runs.
-pub fn ngrams(doc: &Document, stopwords: &HashSet<String>, max_n: usize) -> Vec<Candidate> {
-    ngrams_where(doc, |t| is_content(t, stopwords), max_n)
+pub fn ngrams<S: Stoplist + ?Sized>(doc: &Document, stopwords: &S, max_n: usize) -> Vec<Candidate> {
+    ngrams_where_in(doc, |t, l| is_content_in(t, stopwords, l), max_n)
 }
 
 /// Every n-gram of 1 to `max_n` tokens, all accepted by `keep`, within a
 /// sentence.
 pub fn ngrams_where(doc: &Document, keep: impl Fn(&Token) -> bool, max_n: usize) -> Vec<Candidate> {
+    ngrams_where_in(doc, |t, _| keep(t), max_n)
+}
+
+/// [`ngrams_where`] with each token's sentence language.
+pub(crate) fn ngrams_where_in(
+    doc: &Document,
+    keep: impl Fn(&Token, Option<&Language>) -> bool,
+    max_n: usize,
+) -> Vec<Candidate> {
     let mut c = Collector::default();
     let mut shift = 0;
-    for sentence in doc.sentences() {
+    for (sentence, language) in doc.sentences_in() {
         for j in 0..sentence.len() {
             for k in j + 1..=(j + max_n).min(sentence.len()) {
-                if !keep(&sentence[k - 1]) {
+                if !keep(&sentence[k - 1], language) {
                     break;
                 }
                 c.add(&sentence[j..k], shift + j);
@@ -544,26 +657,65 @@ pub fn noun_phrases(doc: &Document, max_words: usize) -> Vec<Candidate> {
 /// dropped when a word is a stopword, a word is only punctuation, the words
 /// total fewer than 3 characters, a word has fewer than 2 characters, it has
 /// more than `max_words` words, or a word has characters other than
-/// alphanumerics and `-`.
-pub fn filter_candidates(
+/// alphanumerics and `-`. Stopwords are looked up with no sentence
+/// language; see [`filter_candidates_in`] for documents with languages.
+pub fn filter_candidates<S: Stoplist + ?Sized>(
     candidates: Vec<Candidate>,
-    stopwords: &HashSet<String>,
+    stopwords: &S,
     max_words: usize,
 ) -> Vec<Candidate> {
     candidates
         .into_iter()
+        .filter(|c| keeps(c, stopwords, None, max_words))
+        .collect()
+}
+
+/// [`filter_candidates`] for candidates of `doc`, looking up stopwords in
+/// the language of the sentence of each candidate's first occurrence.
+pub fn filter_candidates_in<S: Stoplist + ?Sized>(
+    doc: &Document,
+    candidates: Vec<Candidate>,
+    stopwords: &S,
+    max_words: usize,
+) -> Vec<Candidate> {
+    let languages = doc.sentence_languages();
+    if languages.is_empty() {
+        return filter_candidates(candidates, stopwords, max_words);
+    }
+    // First token offset of each sentence, to find a candidate's sentence.
+    let starts: Vec<usize> = doc
+        .sentences()
+        .iter()
+        .scan(0, |n, s| {
+            let start = *n;
+            *n += s.len();
+            Some(start)
+        })
+        .collect();
+    candidates
+        .into_iter()
         .filter(|c| {
-            let words: Vec<&str> = c.surface.split(' ').collect();
-            !words.iter().any(|w| stopwords.contains(*w))
-                && !words.iter().any(|w| !w.chars().any(char::is_alphanumeric))
-                && words.iter().map(|w| w.chars().count()).sum::<usize>() >= 3
-                && words.iter().all(|w| w.chars().count() >= 2)
-                && c.len() <= max_words
-                && words
-                    .iter()
-                    .all(|w| w.chars().all(|ch| ch.is_alphanumeric() || ch == '-'))
+            let i = starts.partition_point(|&s| s <= c.first_offset()) - 1;
+            keeps(c, stopwords, languages.get(i), max_words)
         })
         .collect()
+}
+
+fn keeps<S: Stoplist + ?Sized>(
+    c: &Candidate,
+    stopwords: &S,
+    language: Option<&Language>,
+    max_words: usize,
+) -> bool {
+    let words: Vec<&str> = c.surface.split(' ').collect();
+    !words.iter().any(|w| stopwords.is_stopword_in(w, language))
+        && !words.iter().any(|w| !w.chars().any(char::is_alphanumeric))
+        && words.iter().map(|w| w.chars().count()).sum::<usize>() >= 3
+        && words.iter().all(|w| w.chars().count() >= 2)
+        && c.len() <= max_words
+        && words
+            .iter()
+            .all(|w| w.chars().all(|ch| ch.is_alphanumeric() || ch == '-'))
 }
 
 #[cfg(test)]
@@ -785,5 +937,175 @@ mod tests {
             .map(|c| c.surface)
             .collect();
         assert_eq!(kept, vec!["code", "big-data sets"]);
+    }
+
+    /// German if the text has "die" or "und", else English if it has
+    /// "the", else nothing.
+    fn german_detector(text: &str) -> Option<Language> {
+        let has = |w: &str| text.split_whitespace().any(|t| t.eq_ignore_ascii_case(w));
+        if has("die") || has("und") {
+            Language::from_code("de")
+        } else if has("the") {
+            Some(Language::english())
+        } else {
+            None
+        }
+    }
+
+    const MIXED: &str = "Die Hunde und die Katzen schlafen im Garten. \
+                         The dogs and the cats sleep in the garden.";
+
+    #[test]
+    fn each_sentence_is_stemmed_and_filtered_in_its_language() {
+        let policy = LanguagePolicy::DetectPerSentence {
+            fallback: Language::english(),
+        };
+        let doc = Document::from_text_with_detector(MIXED, &policy, &german_detector);
+        let codes: Vec<&str> = doc.sentence_languages().iter().map(|l| l.code()).collect();
+        assert_eq!(codes, ["de", "en"]);
+        // German Snowball: "Hunde" -> "hund"; English Porter2: "dogs" -> "dog".
+        assert_eq!(doc.sentences()[0][1].stem, "hund");
+        assert_eq!(doc.sentences()[1][1].stem, "dog");
+        // An English method filters the German sentence with German stopwords.
+        let got: Vec<String> = delimited_phrases(&doc, &Language::english(), 5)
+            .into_iter()
+            .map(|c| c.surface)
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "hunde",
+                "katzen schlafen",
+                "garten",
+                "dogs",
+                "cats sleep",
+                "garden"
+            ]
+        );
+        // One set for every sentence: English "die" is not a stopword.
+        let en = Language::english().stopwords().clone();
+        assert_eq!(
+            delimited_phrases(&doc, &en, 10)[0].surface,
+            "die hunde und die katzen schlafen im garten"
+        );
+    }
+
+    #[test]
+    fn fixed_language_matches_from_text_for_english() {
+        let text = "Graph-based ranking of keyphrases. It works.";
+        let en = Document::from_text_with(text, &LanguagePolicy::Fixed(Language::english()));
+        assert_eq!(en, Document::from_text(text));
+        let de = Document::from_text_with(
+            "Die Häuser stehen.",
+            &LanguagePolicy::Fixed(Language::from_code("de").unwrap()),
+        );
+        assert_eq!(de.sentences()[0][1].stem, "haus");
+        assert_eq!(de.sentence_spans().len(), 1);
+        assert_eq!(de.sentence_spans()[0], 0..19);
+    }
+
+    #[test]
+    fn method_list_applies_to_its_own_language_only() {
+        let policy = LanguagePolicy::DetectPerSentence {
+            fallback: Language::english(),
+        };
+        let doc = Document::from_text_with_detector(MIXED, &policy, &german_detector);
+        // A custom English list ("cats") on an English method; German
+        // sentences keep NLTK's German list.
+        let method = Language::english().with_stopwords(["the", "and", "in", "cats"]);
+        let got: Vec<String> = delimited_phrases(&doc, &method, 5)
+            .into_iter()
+            .map(|c| c.surface)
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "hunde",
+                "katzen schlafen",
+                "garten",
+                "dogs",
+                "sleep",
+                "garden"
+            ]
+        );
+        // Documents built from tokens have no language: the method's list
+        // applies everywhere.
+        let tokens = Document::from_tokens(doc.sentences().to_vec());
+        assert!(tokens.sentence_languages().is_empty());
+        assert_eq!(
+            delimited_phrases(&tokens, &method, 10)[0].surface,
+            "die hunde und die katzen schlafen im garten"
+        );
+    }
+
+    #[test]
+    fn delimiters_end_candidates_but_not_content_words() {
+        let doc = Document::from_text("Smith et al proposed graph ranking.");
+        let mut roles = Roles::default();
+        roles.set_delimiters(["ET", "al", "proposed"]);
+        let got: Vec<String> = delimited_phrases(&doc, &roles.delimiting(&doc), 5)
+            .into_iter()
+            .map(|c| c.surface)
+            .collect();
+        assert_eq!(got, ["smith", "graph ranking"]);
+        let content: Vec<&str> = doc
+            .tokens()
+            .filter(|t| is_content_in(t, roles.language(), None))
+            .map(|t| t.word.as_str())
+            .collect();
+        assert_eq!(
+            content,
+            ["Smith", "et", "al", "proposed", "graph", "ranking"]
+        );
+        // The extension belongs to the method's language.
+        let de = Document::from_text_with(
+            "Smith et al",
+            &LanguagePolicy::Fixed(Language::from_code("de").unwrap()),
+        );
+        assert_eq!(delimited_phrases(&de, &roles.delimiting(&de), 5).len(), 1);
+    }
+
+    #[test]
+    fn curly_apostrophes_match_the_list() {
+        let doc = Document::from_text("They don\u{2019}t rank. Company\u{2019}s graph.");
+        let stop = crate::default_stopwords();
+        let words: Vec<&str> = doc
+            .tokens()
+            .filter(|t| is_content(t, &stop))
+            .map(|t| t.word.as_str())
+            .collect();
+        assert_eq!(words, ["rank", "Company\u{2019}s", "graph"]);
+        assert_eq!(stem("Company\u{2019}s"), stem("company's"));
+    }
+
+    #[test]
+    fn smart_extends_english_boundaries_in_untagged_text_only() {
+        let roles = Roles::default();
+        let text = "The following graph ranking provides various keyphrases.";
+        let doc = Document::from_text(text);
+        let got: Vec<String> = delimited_phrases(&doc, &roles.delimiting(&doc), 5)
+            .into_iter()
+            .map(|c| c.surface)
+            .collect();
+        assert_eq!(got, ["graph ranking", "keyphrases"]);
+        // Weighting keeps NLTK: "following" is still a content word.
+        assert!(is_content_in(
+            &doc.sentences()[0][1],
+            roles.language(),
+            None
+        ));
+        // Tagged text: part-of-speech tags select candidates, NLTK only.
+        let tagged = Document::from_tagged(&[vec![("following", Pos::Adj), ("graph", Pos::Noun)]]);
+        let delimiting = roles.delimiting(&tagged);
+        assert!(!delimiting.is_stopword_in("following", None));
+        assert!(delimiting.is_stopword_in("the", None));
+        // Other languages keep NLTK; an empty extension restores NLTK for English.
+        let de = Language::from_code("de").unwrap();
+        assert!(!roles
+            .delimiting(&doc)
+            .is_stopword_in("following", Some(&de)));
+        let mut nltk = Roles::default();
+        nltk.set_delimiters([""; 0]);
+        assert!(!nltk.delimiting(&doc).is_stopword_in("following", None));
     }
 }

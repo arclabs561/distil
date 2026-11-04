@@ -25,14 +25,14 @@
 
 use super::select::greedy;
 use super::{content_stems, counts, dot, sentence_idf, word_count, Budget, SentenceExtractor};
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// MEAD's centroid, position and first-sentence score with a redundancy
 /// penalty.
 #[derive(Debug, Clone)]
 pub struct Centroid {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     weights: [f64; 3],
     threshold: f64,
     idf: Option<(HashMap<String, f64>, f64)>,
@@ -49,7 +49,7 @@ impl Centroid {
     /// stopwords.
     pub fn new() -> Self {
         Centroid {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             weights: [1.0; 3],
             threshold: 0.0,
             idf: None,
@@ -58,7 +58,15 @@ impl Centroid {
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -84,7 +92,7 @@ impl Centroid {
     /// `SCORE(i)` of each sentence, in document order, before the
     /// redundancy penalty.
     pub fn scores(&self, doc: &Document) -> Vec<f64> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let n = terms.len();
         let own = sentence_idf(&terms);
         let idf = |w: &str| match &self.idf {
@@ -116,7 +124,7 @@ impl Centroid {
 
     fn select(&self, doc: &Document, budget: Budget) -> Vec<(usize, f64)> {
         let score = self.scores(doc);
-        let sets: Vec<HashSet<&str>> = content_stems(doc, &self.stopwords)
+        let sets: Vec<HashSet<&str>> = content_stems(doc, self.stopwords.language())
             .into_iter()
             .map(|s| s.into_iter().collect())
             .collect();

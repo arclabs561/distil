@@ -29,15 +29,16 @@
 //! - The paper returns a set. Phrases are ranked by the number of exemplar
 //!   words they contain, then by first occurrence.
 
-use crate::default_stopwords;
 use crate::graph::rank;
-use crate::text::{delimited_phrases, is_content, noun_phrases, Candidate, Document};
+use crate::text::{
+    delimited_phrases, is_content_in, noun_phrases, Candidate, Document, Roles, Stoplist,
+};
 use std::collections::{HashMap, HashSet};
 
 /// KeyCluster keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct KeyCluster {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     window: usize,
     cluster_fraction: f64,
     frequent: HashSet<String>,
@@ -53,7 +54,7 @@ impl KeyCluster {
     /// Window 10, `m = 2n / 3`, English stopwords, no frequent-word list.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             window: 10,
             cluster_fraction: 2.0 / 3.0,
             frequent: HashSet::new(),
@@ -62,7 +63,30 @@ impl KeyCluster {
 
     /// Stopwords excluded from terms (and delimiting untagged phrases).
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`]).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -86,7 +110,7 @@ impl KeyCluster {
 
     /// Up to `max` keyphrases with co-occurrence relatedness, best first.
     pub fn rank(&self, doc: &Document, max: usize) -> Vec<(String, f64)> {
-        let counts = cooccurrence(doc, &self.stopwords, self.window);
+        let counts = cooccurrence(doc, self.stopwords.language(), self.window);
         self.rank_with(
             doc,
             &|a, b| counts.get(&key(a, b)).copied().unwrap_or(0.0),
@@ -106,7 +130,7 @@ impl KeyCluster {
         let phrases: Vec<Candidate> = if doc.is_tagged() {
             noun_phrases(doc, usize::MAX)
         } else {
-            delimited_phrases(doc, &self.stopwords, 5)
+            delimited_phrases(doc, &self.stopwords.delimiting(doc), 5)
         };
         let scored = phrases.iter().filter_map(|c| {
             let hits = c
@@ -127,7 +151,10 @@ impl KeyCluster {
         relatedness: &dyn Fn(&str, &str) -> f64,
     ) -> HashSet<String> {
         let mut terms: Vec<&str> = Vec::new();
-        for t in doc.tokens().filter(|t| is_content(t, &self.stopwords)) {
+        for (t, _) in doc
+            .tokens_in()
+            .filter(|(t, l)| is_content_in(t, self.stopwords.language(), *l))
+        {
             if !terms.contains(&t.stem.as_str()) {
                 terms.push(&t.stem);
             }
@@ -194,17 +221,17 @@ fn key(a: &str, b: &str) -> (String, String) {
 /// counting every token.
 fn cooccurrence(
     doc: &Document,
-    stopwords: &HashSet<String>,
+    stopwords: &(impl Stoplist + ?Sized),
     window: usize,
 ) -> HashMap<(String, String), f64> {
-    let tokens: Vec<_> = doc.tokens().collect();
+    let tokens: Vec<_> = doc.tokens_in().collect();
     let mut counts = HashMap::new();
-    for (i, a) in tokens.iter().enumerate() {
-        if !is_content(a, stopwords) {
+    for (i, &(a, la)) in tokens.iter().enumerate() {
+        if !is_content_in(a, stopwords, la) {
             continue;
         }
-        for b in tokens.iter().skip(i + 1).take(window - 1) {
-            if is_content(b, stopwords) && a.stem != b.stem {
+        for &(b, lb) in tokens.iter().skip(i + 1).take(window - 1) {
+            if is_content_in(b, stopwords, lb) && a.stem != b.stem {
                 *counts.entry(key(&a.stem, &b.stem)).or_insert(0.0) += 1.0;
             }
         }

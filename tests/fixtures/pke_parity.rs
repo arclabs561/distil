@@ -9,6 +9,10 @@ pub struct Case {
     pub methods: &'static [(&'static str, &'static [(&'static str, f64)])],
 }
 
+/// Size of pke's stoplist (spaCy's English stopwords); each case
+/// keeps only the list's words that occur in its text.
+pub const STOPLIST_LEN: usize = 326;
+
 pub const DF_DOCUMENTS: usize = 4;
 
 pub const DF: &[(&str, usize)] = &[

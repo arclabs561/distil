@@ -53,6 +53,16 @@ fn unstemmed(case: &fixture::Case) -> Document {
     )
 }
 
+/// The lists the references ran with: sumy's `english.txt` (580 words, a
+/// superset of SMART) and the `lexrank` package's English list (563). A
+/// swapped list fails here.
+#[test]
+fn reference_lists_are_the_tools_own() {
+    assert_eq!(stopwords().len(), 580);
+    let lexrank: HashSet<&str> = fixture::LEXRANK_STOPWORDS.iter().copied().collect();
+    assert_eq!(lexrank.len(), 563);
+}
+
 fn stopwords() -> HashSet<String> {
     fixture::STOPWORDS.iter().map(|s| s.to_string()).collect()
 }

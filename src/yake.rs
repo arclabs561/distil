@@ -45,7 +45,7 @@
 //!
 //! - Tokens and sentences come from a [`Document`] instead of segtok; the
 //!   parity test feeds the package's own segmentation.
-//! - English stopwords are [`default_stopwords`],
+//! - English stopwords are [`default_stopwords`](crate::default_stopwords),
 //!   not the package's 574-word list; pass that list with
 //!   [`Yake::with_stopwords`] for package scores.
 //! - Deduplication uses the Levenshtein ratio (the package's `levs`). The
@@ -53,14 +53,14 @@
 //!   `difflib` similarity and is not reproduced.
 //! - Phrases are returned lowercased.
 
-use crate::text::Document;
-use crate::{default_stopwords, KeywordExtractor};
+use crate::text::{Document, Roles, Stoplist};
+use crate::{KeywordExtractor, Language};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// YAKE keyphrase extractor (the published algorithm).
 #[derive(Debug, Clone)]
 pub struct Yake {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     max_ngram: usize,
     window: usize,
     dedup: f64,
@@ -93,7 +93,7 @@ impl Yake {
     /// Trigrams, window 1, deduplication threshold 0.9, English stopwords.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             max_ngram: 3,
             window: 1,
             dedup: 0.9,
@@ -102,7 +102,16 @@ impl Yake {
 
     /// Stopword list (lowercase).
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`]).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -132,13 +141,25 @@ impl Yake {
             .iter()
             .map(|s| s.iter().map(|t| t.word.as_str()).collect())
             .collect();
-        self.rank_tokens(&sentences, max)
+        let languages: Vec<Option<&Language>> = doc.sentences_in().map(|(_, l)| l).collect();
+        self.rank_in(&sentences, &languages, max)
     }
 
     /// [`Yake::rank`] on sentences of tokens from the caller's tokenizer.
     pub fn rank_tokens<S: AsRef<str>>(
         &self,
         sentences: &[Vec<S>],
+        max: usize,
+    ) -> Vec<(String, f64)> {
+        self.rank_in(sentences, &[], max)
+    }
+
+    /// [`Yake::rank_tokens`] with each sentence's language, if known. A
+    /// term's stopword status comes from its first occurrence.
+    fn rank_in<S: AsRef<str>>(
+        &self,
+        sentences: &[Vec<S>],
+        languages: &[Option<&Language>],
         max: usize,
     ) -> Vec<(String, f64)> {
         let mut terms: Vec<Term> = Vec::new();
@@ -155,7 +176,8 @@ impl Yake {
                     continue;
                 }
                 let tag = tag(word, pos);
-                let id = self.term(word, &mut terms, &mut term_ids);
+                let language = languages.get(sid).copied().flatten();
+                let id = self.term(word, language, &mut terms, &mut term_ids);
                 let t = &mut terms[id];
                 *t.sentences.entry(sid).or_insert(0) += 1;
                 t.tf += 1.0;
@@ -216,9 +238,16 @@ impl Yake {
         out
     }
 
-    fn term(&self, word: &str, terms: &mut Vec<Term>, ids: &mut HashMap<String, usize>) -> usize {
+    fn term(
+        &self,
+        word: &str,
+        language: Option<&Language>,
+        terms: &mut Vec<Term>,
+        ids: &mut HashMap<String, usize>,
+    ) -> usize {
+        let stop = |w: &str| self.stopwords.language().is_stopword_in(w, language);
         let lower = word.to_lowercase();
-        let listed = self.stopwords.contains(&lower);
+        let listed = stop(&lower);
         let mut unique = lower;
         if unique.ends_with('s') && unique.chars().count() > 3 {
             unique.pop();
@@ -228,7 +257,7 @@ impl Yake {
         }
         let letters = unique.chars().filter(|c| !c.is_ascii_punctuation()).count();
         terms.push(Term {
-            stopword: listed || self.stopwords.contains(&unique) || letters < 3,
+            stopword: listed || stop(&unique) || letters < 3,
             ..Term::default()
         });
         ids.insert(unique, terms.len() - 1);
@@ -363,7 +392,7 @@ impl KeywordExtractor for Yake {
     /// returns `1 / (1 + S(kw))`, which keeps the order, is higher-is-better
     /// like every other extractor, and lies in (0, 1].
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), max_keywords)
+        self.rank(&self.stopwords.document(text), max_keywords)
             .into_iter()
             .map(|(k, h)| (k, 1.0 / (1.0 + h)))
             .collect()

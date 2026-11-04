@@ -30,15 +30,17 @@
 //! - The window counts all tokens and ignores sentence boundaries. Iteration
 //!   runs to an L1 change of 1e-10 (the paper: 1e-4).
 
-use crate::graph::{is_graph_word, rank_by_word_sum, WordGraph};
-use crate::text::{delimited_phrases, longest_sequences, Candidate, Document, Pos};
-use crate::{default_stopwords, KeywordExtractor};
+use crate::graph::{graph_words, rank_by_word_sum, WordGraph};
+use crate::text::{
+    delimited_phrases, longest_sequences, Candidate, Document, Pos, Roles, Stoplist,
+};
+use crate::KeywordExtractor;
 use std::collections::{HashMap, HashSet};
 
 /// ExpandRank keyphrase extractor.
 #[derive(Debug, Clone)]
 pub struct ExpandRank {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     window: usize,
 }
 
@@ -52,14 +54,38 @@ impl ExpandRank {
     /// Window 10, English stopwords for untagged text.
     pub fn new() -> Self {
         Self {
-            stopwords: default_stopwords(),
+            stopwords: Roles::default(),
             window: 10,
         }
     }
 
     /// Stopwords used for untagged text.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one, and text given
+    /// to `extract` is stemmed with its stemmer. Sentences of a document in
+    /// another language use that language's stopwords
+    /// ([`Stoplist`]).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
+        self
+    }
+
+    /// Replace the extra words that end candidate phrases in untagged text
+    /// but still count as content words for scoring. The default is the
+    /// SMART list (570 words) in English sentences and nothing in other
+    /// languages. A list given here applies to sentences in the method's
+    /// language; include SMART yourself to extend it with a domain list
+    /// ("et", "al", "fig"), or pass an empty list for NLTK's list alone.
+    pub fn with_delimiters<I, S>(mut self, words: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.stopwords.set_delimiters(words);
         self
     }
 
@@ -76,7 +102,7 @@ impl ExpandRank {
         doc: &Document,
         neighbours: &[(&Document, f64)],
     ) -> HashMap<String, f64> {
-        word_scores(doc, neighbours, &self.stopwords, self.window)
+        word_scores(doc, neighbours, self.stopwords.language(), self.window)
     }
 
     /// Up to `max` keyphrases of `doc`, best first.
@@ -86,7 +112,7 @@ impl ExpandRank {
         neighbours: &[(&Document, f64)],
         max: usize,
     ) -> Vec<(String, f64)> {
-        let candidates = paper_candidates(doc, &self.stopwords);
+        let candidates = paper_candidates(doc, &self.stopwords.delimiting(doc));
         rank_by_word_sum(&candidates, &self.word_scores(doc, neighbours), max)
     }
 }
@@ -94,10 +120,10 @@ impl ExpandRank {
 pub(crate) fn word_scores(
     doc: &Document,
     neighbours: &[(&Document, f64)],
-    stopwords: &HashSet<String>,
+    stopwords: &(impl Stoplist + ?Sized),
     window: usize,
 ) -> HashMap<String, f64> {
-    let accept = |t: &crate::text::Token| is_graph_word(t, stopwords);
+    let accept = graph_words(stopwords);
     let mut g = WordGraph::default();
     g.add_document(doc, &accept, window, 1.0);
     for &(n, sim) in neighbours {
@@ -110,7 +136,10 @@ pub(crate) fn word_scores(
 
 /// Runs of nouns and adjectives ending in a noun (tagged), otherwise
 /// delimited phrases of at most five words.
-pub(crate) fn paper_candidates(doc: &Document, stopwords: &HashSet<String>) -> Vec<Candidate> {
+pub(crate) fn paper_candidates(
+    doc: &Document,
+    stopwords: &(impl Stoplist + ?Sized),
+) -> Vec<Candidate> {
     if !doc.is_tagged() {
         return delimited_phrases(doc, stopwords, 5);
     }
@@ -123,7 +152,7 @@ pub(crate) fn paper_candidates(doc: &Document, stopwords: &HashSet<String>) -> V
 impl KeywordExtractor for ExpandRank {
     /// Without neighbour documents ExpandRank is SingleRank.
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
-        self.rank(&Document::from_text(text), &[], max_keywords)
+        self.rank(&self.stopwords.document(text), &[], max_keywords)
     }
 }
 

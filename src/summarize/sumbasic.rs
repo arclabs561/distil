@@ -21,13 +21,13 @@
 
 use super::select::greedy;
 use super::{content_stems, distribution, Budget, SentenceExtractor};
-use crate::text::Document;
+use crate::text::{Document, Roles};
 use std::collections::{HashMap, HashSet};
 
 /// SumBasic.
 #[derive(Debug, Clone)]
 pub struct SumBasic {
-    stopwords: HashSet<String>,
+    stopwords: Roles,
     top_word_rule: bool,
 }
 
@@ -41,14 +41,22 @@ impl SumBasic {
     /// English stopwords, with the paper's most-probable-word rule.
     pub fn new() -> Self {
         SumBasic {
-            stopwords: crate::default_stopwords(),
+            stopwords: Roles::default(),
             top_word_rule: true,
         }
     }
 
     /// Replace the stopword list.
     pub fn with_stopwords(mut self, stopwords: HashSet<String>) -> Self {
-        self.stopwords = stopwords;
+        self.stopwords.set_stopwords(stopwords);
+        self
+    }
+
+    /// Stopword language: its list replaces the current one. Sentences of a
+    /// document in another language use that language's stopwords
+    /// ([`Stoplist`](crate::text::Stoplist)).
+    pub fn with_language(mut self, language: crate::Language) -> Self {
+        self.stopwords.set_language(language);
         self
     }
 
@@ -62,7 +70,7 @@ impl SumBasic {
 
 impl SentenceExtractor for SumBasic {
     fn rank(&self, doc: &Document) -> Vec<(usize, f64)> {
-        let terms = content_stems(doc, &self.stopwords);
+        let terms = content_stems(doc, self.stopwords.language());
         let p0 = distribution(&terms);
         // After m chosen sentences contain w, p(w) = p0(w)^(2^m).
         greedy(
