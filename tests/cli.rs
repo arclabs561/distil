@@ -279,6 +279,29 @@ fn usage_errors_exit_2() {
 }
 
 #[test]
+fn lang_auto_detects_the_stopword_language() {
+    let en = distil(&["keywords", "-m", "rake"], Some(ABSTRACT));
+    let auto = distil(
+        &["keywords", "-m", "rake", "--lang", "auto"],
+        Some(ABSTRACT),
+    );
+    assert_eq!(stdout(&auto), stdout(&en));
+
+    let german = "Die Extraktion von Schlüsselwörtern wählt die Phrasen aus, die ein \
+        Dokument am besten beschreiben. Graphbasierte Verfahren bauen einen Wortgraphen \
+        und ordnen die Wörter mit PageRank. Die Verfahren brauchen keine Trainingsdaten.";
+    let o = distil(&["keywords", "-m", "rake", "--lang", "auto"], Some(german));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let phrases: Vec<String> = rows(&stdout(&o)).into_iter().map(|(_, p)| p).collect();
+    assert!(!phrases.is_empty());
+    for p in &phrases {
+        for stop in ["die", "von", "und", "mit", "ein", "keine"] {
+            assert!(!p.split(' ').any(|w| w == stop), "{p:?} has {stop:?}");
+        }
+    }
+}
+
+#[test]
 fn topical_page_rank_with_a_topic_file() {
     let topics = temp_file(
         "topics.tsv",
