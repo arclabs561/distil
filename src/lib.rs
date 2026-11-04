@@ -83,6 +83,7 @@ mod rake_extractor;
 pub mod sgrank;
 pub mod singlerank;
 pub mod stopwords;
+pub mod summarize;
 pub mod text;
 pub mod textrank;
 pub mod tfidf;
@@ -106,6 +107,7 @@ pub use sgrank::SgRank;
 pub use singlerank::SingleRank;
 #[doc(inline)]
 pub use stopwords::{default_stopwords, STOPWORDS};
+pub use summarize::{Budget, SentenceExtractor};
 pub use textrank::TextRank;
 pub use tfidf::{DocumentFrequency, TfIdf};
 pub use tomokiyohurst::TomokiyoHurst;
