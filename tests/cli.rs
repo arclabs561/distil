@@ -118,9 +118,17 @@ fn file_input_matches_stdin() {
 fn every_listed_method_runs() {
     let o = distil(&["methods"], None);
     assert!(o.status.success());
-    let names: Vec<String> = stdout(&o)
+    let listed: Vec<(String, String)> = stdout(&o)
         .lines()
-        .map(|l| l.split('\t').next().unwrap().to_string())
+        .map(|l| {
+            let mut f = l.split('\t');
+            (f.next().unwrap().to_string(), f.next().unwrap().to_string())
+        })
+        .collect();
+    let names: Vec<&str> = listed
+        .iter()
+        .filter(|(_, kind)| kind == "keyphrase")
+        .map(|(n, _)| n.as_str())
         .collect();
     assert!(names.len() >= 14);
     assert_eq!(names[0], "position-rank");
@@ -128,12 +136,58 @@ fn every_listed_method_runs() {
     // own tests.
     for name in names
         .iter()
-        .filter(|n| !matches!(n.as_str(), "topical-page-rank" | "tf-idf" | "kp-miner"))
+        .filter(|n| !matches!(**n, "topical-page-rank" | "tf-idf" | "kp-miner"))
     {
         let o = distil(&["keywords", "-m", name, "-k", "2"], Some(ABSTRACT));
         assert!(o.status.success(), "{name}: {}", stderr(&o));
         assert!(!rows(&stdout(&o)).is_empty(), "{name} found nothing");
     }
+    let sentence: Vec<&str> = listed
+        .iter()
+        .filter(|(_, kind)| kind == "sentence")
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert!(sentence.len() >= 10, "{sentence:?}");
+    for name in sentence {
+        let o = distil(&["summarize", "-m", name, "-n", "2"], Some(ABSTRACT));
+        assert!(o.status.success(), "{name}: {}", stderr(&o));
+        assert_eq!(stdout(&o).lines().count(), 2, "{name}: {}", stdout(&o));
+    }
+}
+
+#[test]
+fn summarize_keeps_document_order_and_budgets() {
+    let o = distil(&["summarize", "-m", "lead", "-n", "2"], Some(ABSTRACT));
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "Keyphrase extraction selects the phrases that best describe a document.\n\
+         Graph-based keyphrase extraction builds a word graph from co-occurrence and ranks \
+         words with PageRank.\n"
+    );
+    // The first sentence has 11 words, the second 14: a 12-word budget
+    // keeps only the first.
+    let o = distil(
+        &["summarize", "-m", "lead", "--words", "12"],
+        Some(ABSTRACT),
+    );
+    assert_eq!(stdout(&o).lines().count(), 1, "{}", stdout(&o));
+    let o = distil(&["summarize", "-n", "1", "--words", "5"], Some(ABSTRACT));
+    assert_eq!(o.status.code(), Some(2));
+}
+
+#[test]
+fn summarize_json_lists_index_score_and_text() {
+    let o = distil(
+        &["summarize", "--json", "-m", "lead", "-n", "1"],
+        Some(ABSTRACT),
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "{\"source\":\"-\",\"method\":\"lead\",\"sentences\":[{\"index\":0,\"score\":3,\
+         \"text\":\"Keyphrase extraction selects the phrases that best describe a document.\"}]}\n"
+    );
 }
 
 #[test]
