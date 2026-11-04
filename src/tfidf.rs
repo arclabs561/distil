@@ -23,8 +23,6 @@
 //!   candidate and count the document itself as part of the corpus.
 //! - Ties are broken by first occurrence.
 //!
-//! [`TfIdfExtractor`](crate::TfIdfExtractor) is the corpus-free term
-//! frequency baseline; this type needs [`DocumentFrequency`].
 
 use crate::default_stopwords;
 use crate::graph::rank;

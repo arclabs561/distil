@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arclabs561/distil"
-description = "Keyword and keyphrase extraction: TF-IDF, YAKE, TextRank, RAKE"
+description = "Keyword and keyphrase extraction"
 keywords = ["keywords", "keyphrase", "nlp", "text-mining", "textrank"]
 categories = ["text-processing"]
 

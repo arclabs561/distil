@@ -6,9 +6,9 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use distil::text::{is_content, stem, Document};
 use distil::{
-    stopwords, CollabRank, ExpandRank, KeywordExtractor, MultipartiteRank, PositionRank,
-    RakeExtractor, SingleRank, TextRank, TextRankExtractor, TfIdfExtractor, TopicRank,
-    TopicalPageRank, YakeExtractor,
+    stopwords, CollabRank, DocumentFrequency, ExpandRank, FirstPhrases, KeywordExtractor, KpMiner,
+    MultipartiteRank, PositionRank, RakeExtractor, SgRank, SingleRank, TextRank, TfIdf, TopicRank,
+    TopicalPageRank, Yake,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
@@ -89,12 +89,16 @@ enum Method {
     MultipartiteRank,
     #[value(alias = "topicalpagerank")]
     TopicalPageRank,
+    #[value(alias = "sgrank")]
+    SgRank,
+    #[value(alias = "firstphrases")]
+    FirstPhrases,
     Rake,
     Yake,
     #[value(alias = "tfidf")]
     TfIdf,
-    #[value(alias = "textrank-words")]
-    TextRankWords,
+    #[value(alias = "kpminer")]
+    KpMiner,
 }
 
 impl Method {
@@ -114,16 +118,15 @@ impl Method {
             Method::TopicRank => "graph of topics, clusters of similar candidates",
             Method::MultipartiteRank => "multipartite graph of candidates by topic",
             Method::TopicalPageRank => "word graph biased by a topic model (needs --topics)",
+            Method::SgRank => "statistical scores refined by a candidate graph",
+            Method::FirstPhrases => "earliest noun phrases (baseline)",
             Method::Rake => "phrases between stopwords, frequency times degree",
-            Method::Yake => "statistical features of n-grams (simplified YAKE)",
-            Method::TfIdf => "term frequency within each input, single words",
-            Method::TextRankWords => "PageRank on word co-occurrence, single words",
+            Method::Yake => "YAKE: casing, position, frequency and spread of terms",
+            Method::TfIdf => "TF-IDF over the inputs (needs two or more inputs)",
+            Method::KpMiner => {
+                "TF-IDF of phrases seen 3+ times, compounds boosted (two or more inputs)"
+            }
         }
-    }
-
-    /// Whether `--lang` changes this method's stopwords.
-    fn takes_stopwords(self) -> bool {
-        !matches!(self, Method::TfIdf | Method::TextRankWords)
     }
 }
 
@@ -225,13 +228,6 @@ fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
             ),
         );
     };
-    let english = matches!(args.lang.to_lowercase().as_str(), "en" | "eng" | "english");
-    if !english && !args.method.takes_stopwords() {
-        usage_error(
-            ErrorKind::ArgumentConflict,
-            format!("--lang is not supported by {}", args.method.name()),
-        );
-    }
     let topics = match (&args.topics, args.method) {
         (Some(path), Method::TopicalPageRank) => Some(read_topics(path)?),
         (None, Method::TopicalPageRank) => usage_error(
@@ -247,6 +243,15 @@ fn keywords(args: &KeywordsArgs) -> Result<(), Failure> {
     };
 
     let sources = sources(&args.input);
+    if matches!(args.method, Method::TfIdf | Method::KpMiner) && sources.len() < 2 {
+        usage_error(
+            ErrorKind::TooFewValues,
+            format!(
+                "{} needs two or more inputs to estimate document frequencies",
+                args.method.name()
+            ),
+        );
+    }
     let texts = read_all(&sources, args.input.raw)?;
     let ranked = rank(args.method, &texts, args.top, stop, topics.as_ref());
 
@@ -286,9 +291,21 @@ fn rank(
         Method::TopicRank => Box::new(TopicRank::new().with_stopwords(stop)),
         Method::MultipartiteRank => Box::new(MultipartiteRank::new().with_stopwords(stop)),
         Method::Rake => Box::new(RakeExtractor::new().with_stopwords(stop)),
-        Method::Yake => Box::new(YakeExtractor::new().with_stopwords(stop)),
-        Method::TfIdf => Box::new(TfIdfExtractor::new()),
-        Method::TextRankWords => Box::new(TextRankExtractor::new()),
+        Method::Yake => Box::new(Yake::new().with_stopwords(stop)),
+        Method::TfIdf => {
+            let docs = docs();
+            let df = DocumentFrequency::from_documents(&docs, &stop, 3);
+            let tfidf = TfIdf::new().with_stopwords(stop);
+            return docs.iter().map(|d| tfidf.rank(d, &df, k)).collect();
+        }
+        Method::KpMiner => {
+            let docs = docs();
+            let df = DocumentFrequency::from_documents(&docs, &stop, 5);
+            let kpminer = KpMiner::new().with_stopwords(stop);
+            return docs.iter().map(|d| kpminer.rank(d, &df, k)).collect();
+        }
+        Method::SgRank => Box::new(SgRank::new().with_stopwords(stop)),
+        Method::FirstPhrases => Box::new(FirstPhrases::new().with_stopwords(stop)),
         Method::ExpandRank => {
             let docs = docs();
             let sims = similarities(&docs, &stop);

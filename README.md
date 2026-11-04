@@ -2,59 +2,96 @@
 
 Keyword and keyphrase extraction.
 
+distil implements the main unsupervised keyphrase-extraction methods: graph
+ranking, statistical scoring, topic clustering, embedding similarity and
+language-model scoring. Each method has its own module whose documentation
+gives the paper, the equations used, the defaults and any deviation. Where a
+maintained reference implementation exists (pke, the `yake` package), tests
+check that distil produces the same candidates and scores from the same
+tokens.
+
 ## Install
 
 ```toml
 [dependencies]
-distil = { git = "https://github.com/arclabs561/distil" }
+distil = "0.1"
 ```
 
-## Usage
+## Example
 
 ```rust
-use distil::{RakeExtractor, KeywordExtractor};
+use distil::{KeywordExtractor, PositionRank};
 
-let text = "Rust is a systems programming language focused on safety and performance.";
-let extractor = RakeExtractor::new();
-let keywords = extractor.extract(text, 5);
-
-for (phrase, score) in &keywords {
-    println!("{score:.2}  {phrase}");
+let text = "Keyphrase extraction selects the phrases that best describe a document. \
+            Graph-based keyphrase extraction builds a word graph and ranks words \
+            with PageRank, then scores candidate phrases by their words.";
+for (phrase, score) in PositionRank::new().extract(text, 5) {
+    println!("{score:.3}  {phrase}");
 }
 ```
 
 ```text
-16.00  systems programming language focused
-1.00  performance
-1.00  rust
-1.00  safety
+0.297  keyphrase extraction selects
+0.161  word graph
+0.161  ranks words
+0.146  scores candidate phrases
+0.123  best describe
 ```
 
-Four extractors share the `KeywordExtractor` trait:
+Methods that need only the text implement `KeywordExtractor`. Methods that
+need more (document frequencies, neighbour documents, topic distributions,
+vectors, a background corpus) take it in their own `rank` functions.
 
-- `TfIdfExtractor`: term frequency within one document (no IDF without a corpus)
-- `YakeExtractor`: unsupervised, statistical; a simplified YAKE-style score, not the published algorithm
-- `TextRankExtractor`: PageRank over a word co-occurrence graph (uses `graphops`); returns single words
-- `RakeExtractor`: rapid automatic keyword extraction
+## Methods
 
-Tokenization splits on whitespace and punctuation, with English stopwords by
-default. `stopwords::for_language` returns lists for German, French, Spanish,
-Portuguese, Italian, Dutch, Russian, and Arabic; `RakeExtractor` and
-`YakeExtractor` take them through `with_stopwords`. Pre-tokenize CJK, Thai, or
-Arabic text before extraction.
+F1@10 is on the Inspec test set (500 abstracts) with plain-text input,
+stemmed exact match against the keyphrases that occur in the abstract.
+
+| Method | Family | Extra input | Checked against | F1@10 |
+|---|---|---|---|---|
+| `PositionRank` | graph | | pke | 0.258 |
+| `ExpandRank` | graph | neighbour documents | identities with SingleRank | 0.246 |
+| `CollabRank` | graph | a document cluster | identities with ExpandRank | 0.243 |
+| `TopicalPageRank` | graph | topic distributions | pke | 0.242 |
+| `SingleRank` | graph | | pke | 0.239 |
+| `SgRank` | graph over candidates | document frequencies (optional) | paper equations | 0.236 |
+| `RakeExtractor` | statistical | | unit tests | 0.228 |
+| `MultipartiteRank` | graph over topics | | pke | 0.225 |
+| `TopicRank` | graph over topics | | pke | 0.220 |
+| `FirstPhrases` | baseline | | pke | 0.218 |
+| `KeyCluster` | clustering | relatedness (optional) | paper equations | 0.192 |
+| `KpMiner` | statistical | document frequencies | pke | 0.182 |
+| `Yake` | statistical | | `yake` package | 0.172 |
+| `TomokiyoHurst` | language model | background corpus | paper equations | 0.169 |
+| `TfIdf` | statistical | document frequencies | pke | 0.160 |
+| `CommunityCluster` | clustering | relatedness (optional) | paper equations | 0.152 |
+| `TextRank` | graph | | pke | 0.135 |
+| `EmbedRank` | embedding | phrase and document vectors | paper equations | |
+| `WordAttractionRank` | graph | word vectors | paper equations | |
+
+ExpandRank and CollabRank use each abstract's five nearest abstracts by
+TF-IDF cosine. TF-IDF, KP-Miner and Tomokiyo-Hurst take their corpus
+statistics from the 500 abstracts. KP-Miner runs with `with_lasf(1)`,
+since the paper's default of 3 suits long documents. EmbedRank and WordAttractionRank need vectors from a
+model and are not in the table. Reproduce with `scripts/fetch_inspec.sh`
+and `cargo run --release --example eval_inspec`.
+
+Published papers report higher scores for the same methods because they use
+noun-phrase candidates from a part-of-speech tagger. distil selects those
+candidates when given tagged tokens (`text::Document::from_tagged`); from
+plain text it uses phrases between stopwords and punctuation.
 
 ## Command line
 
 The `distil` binary is behind the `cli` feature and needs Rust 1.91 or
-newer (the library itself builds with 1.80). distil is not on crates.io
-yet, so install from git:
+newer (the library builds with 1.80).
 
 ```sh
-cargo install --git https://github.com/arclabs561/distil --features cli distil
+cargo install distil --features cli
 ```
 
-It reads files, http(s) URLs, or stdin (`-`, the default). HTML, PDF, DOCX,
-EPUB, RTF, XLSX and PPTX are converted to text; HTML pages are reduced to
+It reads files, http(s) URLs or stdin (`-`, the default). HTML, PDF, DOCX,
+EPUB, RTF, XLSX and PPTX are converted to text, and HTML pages are reduced to
 their main content unless `--raw` is given.
 
 ```sh
@@ -81,17 +118,27 @@ distil keywords -k 5 https://en.wikipedia.org/wiki/PageRank
 0.0759	using personalized pagerank
 ```
 
-- `distil keywords`: `-m/--method` (default `position-rank`), `-k/--top`,
-  `--lang` for the stopword list, `--json` for one JSON object per input
-  per line. With several inputs, `expand-rank` uses the others as
-  neighbours and `collab-rank` ranks them as one cluster;
-  `topical-page-rank` needs `--topics <FILE>` (see `distil keywords --help`).
+- `distil keywords`: `-m/--method` (default `position-rank`; `distil
+  methods` lists the 14 available), `-k/--top`, `--lang` for the stopword
+  list, `--json` for one JSON object per input per line. With several
+  inputs, `expand-rank` uses the others as neighbours, `collab-rank` ranks
+  them as one cluster, and `tf-idf` and `kp-miner` take document
+  frequencies from them; `topical-page-rank` needs `--topics <FILE>`.
 - `distil text`: print the extracted text.
 - `distil methods`: list the methods.
 
 URLs are fetched with a 20 s timeout, at most 5 redirects and a 20 MB body
 limit; pages that need JavaScript are not rendered. Exit status is 0 on
-success, 1 when an input cannot be read or converted, and 2 for usage errors.
+success, 1 when an input cannot be read or converted, and 2 for usage
+errors.
+
+## Languages
+
+Tokenization splits on whitespace and punctuation, with English stopwords
+by default. `stopwords::for_language` has lists for German, French,
+Spanish, Portuguese, Italian, Dutch, Russian and Arabic, and every method
+takes them through `with_stopwords`. Pre-tokenize CJK or Thai text and pass
+space-separated tokens.
 
 ## License
 
