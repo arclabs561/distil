@@ -122,9 +122,14 @@ fn every_listed_method_runs() {
         .lines()
         .map(|l| l.split('\t').next().unwrap().to_string())
         .collect();
-    assert!(names.len() >= 12);
+    assert!(names.len() >= 14);
     assert_eq!(names[0], "position-rank");
-    for name in names.iter().filter(|n| *n != "topical-page-rank") {
+    // topical-page-rank needs --topics and tf-idf two inputs; both have their
+    // own tests.
+    for name in names
+        .iter()
+        .filter(|n| !matches!(n.as_str(), "topical-page-rank" | "tf-idf" | "kp-miner"))
+    {
         let o = distil(&["keywords", "-m", name, "-k", "2"], Some(ABSTRACT));
         assert!(o.status.success(), "{name}: {}", stderr(&o));
         assert!(!rows(&stdout(&o)).is_empty(), "{name} found nothing");
@@ -393,4 +398,29 @@ fn url_body_over_the_cap_is_rejected() {
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains("exceeds 20 MB"), "{}", stderr(&o));
     assert!(stdout(&o).is_empty());
+}
+
+#[test]
+fn tf_idf_needs_two_inputs_and_ranks_each() {
+    let one = distil(&["keywords", "-m", "tf-idf"], Some(ABSTRACT));
+    assert_eq!(one.status.code(), Some(2), "{}", stderr(&one));
+    let a = temp_file("tfidf-a.txt", ABSTRACT);
+    let b = temp_file(
+        "tfidf-b.txt",
+        "Sentence extraction selects whole sentences for a summary of a document.",
+    );
+    let two = distil(
+        &[
+            "keywords",
+            "-m",
+            "tf-idf",
+            "-k",
+            "3",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(two.status.success(), "{}", stderr(&two));
+    assert_eq!(stdout(&two).matches("== ").count(), 2);
 }

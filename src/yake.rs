@@ -1,13 +1,9 @@
-//! YAKE (Campos et al., 2020), following the published algorithm.
+//! YAKE (Campos et al., 2020).
 //!
 //! Campos, R., Mangaravite, V., Pasquali, A., Jorge, A., Nunes, C. and
 //! Jatowt, A. (2020). YAKE! Keyword extraction from single documents using
 //! multiple local features. Information Sciences 509, 257-289.
 //! doi:10.1016/j.ins.2019.09.013
-//!
-//! [`YakeExtractor`](crate::YakeExtractor) is an older, simplified scorer
-//! kept for compatibility; this type is the published method and matches
-//! the `yake` Python package (`tests/pke_parity.rs`).
 //!
 //! # Method
 //!
@@ -363,11 +359,13 @@ fn similarity(a: &str, b: &str) -> f64 {
 }
 
 impl KeywordExtractor for Yake {
-    /// Scores are negated so that higher is better.
+    /// YAKE's `S(kw)` is non-negative with lower meaning more relevant; this
+    /// returns `1 / (1 + S(kw))`, which keeps the order, is higher-is-better
+    /// like every other extractor, and lies in (0, 1].
     fn extract(&self, text: &str, max_keywords: usize) -> Vec<(String, f64)> {
         self.rank(&Document::from_text(text), max_keywords)
             .into_iter()
-            .map(|(k, h)| (k, -h))
+            .map(|(k, h)| (k, 1.0 / (1.0 + h)))
             .collect()
     }
 }

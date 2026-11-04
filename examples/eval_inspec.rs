@@ -27,8 +27,7 @@ use distil::tomokiyohurst::Background;
 use distil::{
     default_stopwords, CollabRank, CommunityCluster, DocumentFrequency, ExpandRank, FirstPhrases,
     KeyCluster, KeywordExtractor, KpMiner, MultipartiteRank, PositionRank, RakeExtractor, SgRank,
-    SingleRank, TextRank, TextRankExtractor, TfIdf, TfIdfExtractor, TomokiyoHurst, TopicRank,
-    TopicalPageRank, Yake, YakeExtractor,
+    SingleRank, TextRank, TfIdf, TomokiyoHurst, TopicRank, TopicalPageRank, Yake,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -183,9 +182,6 @@ fn main() {
         |e: &dyn KeywordExtractor| -> Ranked { texts.iter().map(|t| e.extract(t, k)).collect() };
     let mut runs: Vec<(&str, Ranked)> = vec![
         ("RAKE", by_text(&RakeExtractor::new())),
-        ("YAKE", by_text(&YakeExtractor::new())),
-        ("TextRank (words)", by_text(&TextRankExtractor::new())),
-        ("TF-IDF", by_text(&TfIdfExtractor::new())),
         ("TextRank", by_text(&TextRank::new())),
         ("SingleRank", by_text(&SingleRank::new())),
         ("PositionRank", by_text(&PositionRank::new())),
@@ -217,13 +213,13 @@ fn main() {
     let bg = Background::from_documents(&docs);
     let each =
         |f: &dyn Fn(&Document) -> Vec<(String, f64)>| -> Ranked { docs.iter().map(f).collect() };
-    runs.push(("TF-IDF (corpus)", each(&|d| TfIdf::new().rank(d, &df, k))));
+    runs.push(("TF-IDF", each(&|d| TfIdf::new().rank(d, &df, k))));
     runs.push(("KP-Miner", each(&|d| KpMiner::new().rank(d, &df, k))));
     runs.push((
         "KP-Miner lasf=1",
         each(&|d| KpMiner::new().with_lasf(1).rank(d, &df, k)),
     ));
-    runs.push(("YAKE (paper)", each(&|d| Yake::new().rank(d, k))));
+    runs.push(("YAKE", each(&|d| Yake::new().rank(d, k))));
     runs.push(("FirstPhrases", by_text(&FirstPhrases::new())));
     runs.push((
         "SGRank",
