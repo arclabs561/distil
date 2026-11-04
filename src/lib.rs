@@ -15,6 +15,28 @@
 //!
 //! All four implement [`KeywordExtractor`].
 //!
+//! # Graph keyphrase methods
+//!
+//! One module per method, each documenting its paper, equations, defaults
+//! and deviations. They work on a [`text::Document`]; given part-of-speech
+//! tags ([`text::Document::from_tagged`]) they select the noun-phrase
+//! candidates of their papers, otherwise stopword- and punctuation-delimited
+//! phrases. Phrases come back lowercased, as first written, best first.
+//!
+//! | Method | Graph nodes | Extra input | Phrase score |
+//! |--------|-------------|-------------|--------------|
+//! | [`TextRank`] | words, window 2, unweighted | | sum over merged top-third words |
+//! | [`SingleRank`] | words, window 10, weighted | | sum of word scores |
+//! | [`ExpandRank`] | words of the document and neighbours | neighbour documents with similarities | sum of word scores |
+//! | [`CollabRank`] | words of a document cluster | the cluster | sum of word scores |
+//! | [`PositionRank`] | words, biased by inverse position | | sum of word scores |
+//! | [`TopicRank`] | topics (clustered candidates) | | topic score, first candidate |
+//! | [`MultipartiteRank`] | candidates, k-partite by topic | | candidate score |
+//! | [`TopicalPageRank`] | words, biased by topic similarity | word-topic and document-topic distributions | sum of word scores |
+//!
+//! All but [`TopicalPageRank`] implement [`KeywordExtractor`] (ExpandRank
+//! and CollabRank with no neighbours or cluster).
+//!
 //! # Language Limitations
 //!
 //! These methods use whitespace/punctuation tokenization and English stopword
@@ -45,6 +67,26 @@
 //! - Mihalcea & Tarau (2004): TextRank
 
 use std::collections::{HashMap, HashSet};
+
+pub mod collabrank;
+pub mod expandrank;
+mod graph;
+pub mod multipartiterank;
+pub mod positionrank;
+pub mod singlerank;
+pub mod text;
+pub mod textrank;
+pub mod topicalpagerank;
+pub mod topicrank;
+
+pub use collabrank::CollabRank;
+pub use expandrank::ExpandRank;
+pub use multipartiterank::MultipartiteRank;
+pub use positionrank::PositionRank;
+pub use singlerank::SingleRank;
+pub use textrank::TextRank;
+pub use topicalpagerank::TopicalPageRank;
+pub use topicrank::TopicRank;
 
 // Compile and run the README's Rust examples as doctests.
 #[cfg(doctest)]
@@ -808,7 +850,7 @@ impl KeywordExtractor for YakeExtractor {
 /// Differs from Mihalcea & Tarau: edges are weighted by co-occurrence count,
 /// a stopword filter stands in for the part-of-speech filter, the default
 /// window is 4, and it returns single words without merging adjacent
-/// keywords into phrases.
+/// keywords into phrases. [`TextRank`] follows the paper.
 ///
 /// # Reference
 ///
