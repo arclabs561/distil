@@ -14,3 +14,18 @@ categories = ["text-processing"]
 [dependencies]
 graphops = "0.1.3"
 rust-stemmers = "1.2"
+
+# The command-line tool and its dependencies; library users get none of them.
+clap = { version = "4.5", optional = true, default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+deformat = { version = "0.17", optional = true, features = ["readability", "pdf", "docx", "epub", "rtf", "xlsx", "pptx", "encoding_rs"] }
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "gzip"] }
+
+[features]
+default = []
+# `cli` builds the `distil` binary (keyphrases from files, URLs and stdin).
+cli = ["dep:clap", "dep:deformat", "dep:ureq"]
+
+[[bin]]
+name = "distil"
+path = "src/bin/distil/main.rs"
+required-features = ["cli"]
