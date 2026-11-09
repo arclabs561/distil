@@ -12,7 +12,7 @@ categories = ["text-processing"]
 [workspace]
 
 [dependencies]
-graphops = "0.1.3"
+graphops = "0.5.3"
 # Sentence and word boundaries (UAX #29 adapted to prose), NLTK's stopword
 # lists, the SMART list and Snowball stemmers per language.
 textprep = { version = "0.3.1", features = ["stem"] }
